@@ -2,22 +2,26 @@
 ## @file build.sh
 #
 #  Container-side build entry for MainlineBootPkg (see MainlineBootPkg.dsc,
-#  which references this script).  Runs inside the podman image defined by
-#  the meta repository's Containerfile and is invoked by
-#  scripts/build-bootloader.sh on the host.
+#  which references this script).  Runs inside the shared container started
+#  through ../podman_container/runin.sh by the meta repo's ./build.sh.
 #
-#  Produces $OUT/BootApp.efi, $OUT/TestBootApp.efi and a toolchain fragment
-#  ($OUT/container-fragment.txt) that the host script merges into
-#  buildinfo.txt.
+#  Produces $OUT/BootApp.efi, $OUT/TestBootApp.efi, $OUT/symbols/ (ELF .dll
+#  + linker maps) and a build-flags fragment ($OUT/container-fragment.txt)
+#  that the host script merges into buildinfo.txt.
 #
-#  Environment:
-#    SRC                - read-only mount of the bootloader meta-repo root
+#  Incrementality: $WORK persists across runs (bind-mounted by ./build.sh).
+#  It holds the source copy refreshed with cp -au plus the edk2 Build tree
+#  and the built BaseTools, so make rebuilds only what changed.  A change of
+#  the edk2 submodule commit wipes the source copy for a from-scratch sync.
+#
+#  Environment (defaults match the runin.sh mount layout):
+#    SRC                - read-only mount of the bootloader meta repo
 #    OUT                - writable output directory
-#    WORK               - scratch dir (default /work)
+#    WORK               - persistent scratch dir (OUT/build)
 #    BOOTLOADER_TARGET  - DEBUG|RELEASE            (default RELEASE)
 #    BOOTLOADER_TOOLCHAIN - CLANG35                (default CLANG35)
 #    BOOTLOADER_ARCH    - AARCH64                  (default AARCH64)
-#    SOURCE_DATE_EPOCH  - pinned by build-bootloader.sh (reproducibility)
+#    SOURCE_DATE_EPOCH  - pinned by ./build.sh (reproducibility)
 #
 #  SPDX-License-Identifier: BSD-3-Clause-Clear
 ##
@@ -25,21 +29,37 @@
 # `set -u` here; errexit + explicit tests below carry the error handling.
 set -eo pipefail
 
-SRC="${SRC:?meta repo root (read-only mount)}"
-OUT="${OUT:?output directory}"
-WORK="${WORK:-/work}"
+SRC="${SRC:-/work/src}"
+OUT="${OUT:-/work/out}"
+WORK="${WORK:-${OUT}/build}"
 TARGET="${BOOTLOADER_TARGET:-RELEASE}"
 TOOLCHAIN="${BOOTLOADER_TOOLCHAIN:-CLANG35}"
 ARCH="${BOOTLOADER_ARCH:-AARCH64}"
 
 export TZ=UTC LC_ALL=C
-: "${SOURCE_DATE_EPOCH:?must be pinned by build-bootloader.sh}"
+: "${SOURCE_DATE_EPOCH:?must be pinned by ./build.sh}"
 
-# Build from a deterministic scratch copy: the pristine checkout mounted at
-# $SRC (including the edk2 submodule) must never be dirtied by the build.
-rm -rf "$WORK"
 mkdir -p "$WORK" "$OUT"
-cp -a "$SRC" "$WORK/src"
+
+# --- persistent scratch copy of the sources -----------------------------------
+# The pristine meta-repo mounted at $SRC (including the edk2 submodule) must
+# never be dirtied; everything is built from the copy below.  cp -au only
+# copies files newer than the copy, keeping the tree incremental.  The edk2
+# commit is stamped: a submodule bump triggers a full refresh (stale files
+# from the old tree would otherwise linger).
+EDK2_STAMP="$WORK/src.edk2-stamp"
+EDK2_NOW="$(git -C "$SRC/edk2" rev-parse HEAD 2>/dev/null || echo nogit)"
+if [ ! -d "$WORK/src" ]; then
+    cp -a "$SRC" "$WORK/src"
+    printf '%s\n' "$EDK2_NOW" > "$EDK2_STAMP"
+elif [ "$(cat "$EDK2_STAMP" 2>/dev/null || true)" != "$EDK2_NOW" ]; then
+    echo "build.sh: edk2 commit changed -> refreshing $WORK/src"
+    rm -rf "$WORK/src"
+    cp -a "$SRC" "$WORK/src"
+    printf '%s\n' "$EDK2_NOW" > "$EDK2_STAMP"
+else
+    cp -au "$SRC/." "$WORK/src/"
+fi
 
 EDK2="$WORK/src/edk2"
 
@@ -52,7 +72,6 @@ export PACKAGES_PATH="$WORK/src"
 # edksetup.sh references $PYTHON_COMMAND / $EDK_TOOLS_PATH unguarded; they
 # must be set first (build.sh also runs under set -u).
 export PYTHON_COMMAND=python3
-export PYTHONDONTWRITEBYTECODE=1
 export EDK_TOOLS_PATH="$EDK2/BaseTools"
 cd "$EDK2"
 . ./edksetup.sh
@@ -68,6 +87,7 @@ cd "$EDK2"
 # Putting these in BUILD_CC reaches every sub-makefile, including Pccts's
 # own ones that reassign BUILD_CFLAGS (EXTRA_OPTFLAGS would not).
 # Host tools only - none of this touches the AARCH64 target compilation.
+# Incremental: the built tools persist in $WORK/src, later runs are no-ops.
 make -C "$EDK2/BaseTools" -j"$(nproc)" \
      BUILD_CC="gcc -std=gnu89 -U_FORTIFY_SOURCE -Wno-stringop-overflow -Wno-stringop-truncation -Wno-use-after-free -Wno-dangling-pointer -Wno-array-bounds -Wno-format-overflow"
 
@@ -89,6 +109,7 @@ fi
 # --- build --------------------------------------------------------------------
 build -p MainlineBootPkg/MainlineBootPkg.dsc -a "$ARCH" -t "$TOOLCHAIN" -b "$TARGET"
 
+# --- collect artifacts ---------------------------------------------------------
 # Module outputs keep their package path, e.g.
 # .../AARCH64/MainlineBootPkg/Application/BootApp/BootApp/OUTPUT/BootApp.efi
 # The sibling DEBUG/ dir holds the link artifacts: <APP>.dll (ELF + DWARF
@@ -105,15 +126,8 @@ for APP in BootApp TestBootApp; do
   cp "$MOD_DIR/DEBUG/$APP.map" "$OUT/symbols/$APP.map"
 done
 
-# --- toolchain fragment for buildinfo.txt --------------------------------------
+# --- build-flags fragment for buildinfo.txt -------------------------------------
 {
-  echo "os                      : $(. /etc/os-release && echo "$PRETTY_NAME")"
-  echo "clang                   : $(clang --version | head -1)"
-  echo "lld                     : $(ld.lld --version | head -1)"
-  echo "llvm-ar                 : $(llvm-ar --version | head -1)"
-  echo "gcc (BaseTools, host)   : $(gcc --version | head -1)"
-  echo "python3                 : $(python3 --version)"
-  echo "make                    : $(make --version | head -1)"
   echo "SOURCE_DATE_EPOCH       : $SOURCE_DATE_EPOCH"
   echo "CLANG35_BIN             : $CLANG35_BIN"
   echo "FUSE_LD                 : $FUSE_LD"

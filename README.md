@@ -9,23 +9,26 @@ Layout:
   container-side build script (`MainlineBootPkg/build.sh`).
 - `edk2/` — git submodule, codelinaro `la/abl/tianocore/edk2`
   (branch `uefi.lnx.6.0.r49-rel`).
-- `Containerfile`, `scripts/build-bootloader.sh` — reproducible podman build.
+- `build.sh` — host entry point; the EFI build runs inside the shared
+  provisioned container from `../podman_container/runin.sh`.
 
 ## Build
 
 ```sh
-OUT=/path/to/output scripts/build-bootloader.sh
-# e.g.
-OUT=/home/wyb/Documents/mainline/build/bootloader scripts/build-bootloader.sh
+./build.sh            # -> ../../build/bootloader/{BootApp,TestBootApp}.efi
 ```
 
-`BOOTLOADER_TARGET=DEBUG` for a debug build; `REBUILD_IMAGE=1` to rebuild the
-builder image. Output goes to `$OUT` (`build/bootloader` inside this repo if
-OUT is unset): `BootApp.efi`, `TestBootApp.efi`, `buildinfo.txt`.
+`OUT=<dir>` (or `./build.sh <dir>`) selects the output directory; unset it
+defaults to `../../build/bootloader` relative to this repository. Other
+knobs: `BOOTLOADER_TARGET=DEBUG`, `BOOTLOADER_CLEAN=1` (wipe `OUT/build`).
 
-The EFI build runs inside `localhost/mainline-bootloader-builder:v1`
-(base image pinned by digest in the `Containerfile`), with the network
-disabled and `SOURCE_DATE_EPOCH` pinned to the meta-repo commit timestamp,
-so rebuilds from the same tree are byte-identical. `buildinfo.txt` records
-the meta-repo and submodule commit hashes (plus diffs when dirty), the
-container image id and the in-container toolchain versions.
+Outputs: `BootApp.efi`, `TestBootApp.efi`, `symbols/` (link-time ELF `.dll`
+with DWARF + linker maps — the `.efi` carry no symbol table) and
+`buildinfo.txt` (meta-repo/submodule/container commit hashes, dirty diffs,
+toolchain versions, artifact hashes).
+
+The build runs `--network=none` with `SOURCE_DATE_EPOCH` pinned to the
+meta-repo commit timestamp; clean rebuilds (`BOOTLOADER_CLEAN=1`) from the
+same tree are byte-identical. Incremental state (source copy, BaseTools,
+edk2 Build tree) persists in `OUT/build` for fast iteration; the edk2
+submodule commit is stamped and a bump refreshes the source copy.
