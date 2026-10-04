@@ -140,6 +140,24 @@ for APP in BootApp TestBootApp; do
   cp "$MOD_DIR/DEBUG/$APP.map" "$OUT/symbols/$APP.map"
 done
 
+# --- ESP image (FAT32, Android sparse) -----------------------------------------
+# Production deployment: the BDS launches <esp>:\EFI\BOOT\BOOTAA64.EFI
+# unattended (see BootApp.c), so the ESP carries exactly BootApp.efi under
+# that name -- TestBootApp is an abl/FV test payload, not an ESP app.
+# Reproducibility: FAT volume id is fixed from the pinned epoch (mkfs.vfat
+# would derive it from the clock) and mcopy keeps the source mtime, which is
+# pinned to SOURCE_DATE_EPOCH above.
+ESP_MB="${BOOTLOADER_ESP_MB:-1024}"
+ESP_RAW="$WORK/esp-fat.img"
+rm -f "$ESP_RAW" "$OUT/esp.img"
+touch -d "@$SOURCE_DATE_EPOCH" "$OUT/BootApp.efi"
+truncate -s "$((ESP_MB * 1024 * 1024))" "$ESP_RAW"
+mkfs.vfat -F 32 -n ESP -i "$(printf '0x%08x' "$SOURCE_DATE_EPOCH")" "$ESP_RAW"
+mmd  -i "$ESP_RAW" ::/EFI ::/EFI/BOOT
+mcopy -i "$ESP_RAW" "$OUT/BootApp.efi" ::/EFI/BOOT/BOOTAA64.EFI
+img2simg "$ESP_RAW" "$OUT/esp.img"
+test -s "$OUT/esp.img"
+
 # --- build-flags fragment for buildinfo.txt -------------------------------------
 {
   echo "SOURCE_DATE_EPOCH       : $SOURCE_DATE_EPOCH"
@@ -147,6 +165,9 @@ done
   echo "FUSE_LD                 : $FUSE_LD"
   echo "CLANG_EXTRA_DLINK_FLAGS : $CLANG_EXTRA_DLINK_FLAGS"
   echo "build command           : build -p MainlineBootPkg/MainlineBootPkg.dsc -a $ARCH -t $TOOLCHAIN -b $TARGET"
+  echo "esp image               : FAT32 ${ESP_MB} MiB -> Android sparse (img2simg),"
+  echo "                           volume id $(printf '0x%08x' "$SOURCE_DATE_EPOCH"),"
+  echo "                           /EFI/BOOT/BOOTAA64.EFI = BootApp.efi"
 } > "$OUT/container-fragment.txt"
 
 echo "build.sh: BootApp.efi + TestBootApp.efi -> $OUT"

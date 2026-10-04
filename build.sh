@@ -53,7 +53,7 @@ SDE="$(git -C "${META}" log -1 --format=%ct HEAD 2>/dev/null || date +%s)"
 if [ -d "${OUT}/build/src" ]; then INCREMENTAL=yes; else INCREMENTAL=no; fi
 
 mkdir -p "${OUT}"
-rm -f "${OUT}/BootApp.efi" "${OUT}/TestBootApp.efi" \
+rm -f "${OUT}/BootApp.efi" "${OUT}/TestBootApp.efi" "${OUT}/esp.img" \
       "${OUT}/container-fragment.txt" "${OUT}/buildinfo.txt"
 rm -rf "${OUT}/symbols"
 
@@ -70,6 +70,7 @@ EXTRA_MOUNTS="--network=none -v ${META}:/work/src:ro -v ${OUT}:/work/out" \
 
 test -s "${OUT}/BootApp.efi"
 test -s "${OUT}/TestBootApp.efi"
+test -s "${OUT}/esp.img"
 test -s "${OUT}/container-fragment.txt"
 
 # --- provenance helpers --------------------------------------------------------
@@ -150,16 +151,18 @@ repo_section() {  # $1 = section title, $2 = repo path
   cat "${OUT}/container-fragment.txt"
   echo
   echo "----- artifacts -----"
+  echo "# esp.img: FAT32 (1 GiB) Android sparse image carrying"
+  echo "# /EFI/BOOT/BOOTAA64.EFI (= BootApp.efi); flash to the ESP partition."
   echo "# symbols/ holds the link-time ELF (.dll, with DWARF - what the .efi's"
   echo "# CodeView debug entry points at) and the linker map for addr->symbol"
   echo "# resolution of on-device crash addresses; the .efi themselves carry"
   echo "# no symbol table (GenFw drops it in the ELF->PE conversion)."
-  ( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi symbols/*.dll symbols/*.map \
-      && ls -l BootApp.efi TestBootApp.efi symbols/*.dll symbols/*.map \
+  ( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi esp.img symbols/*.dll symbols/*.map \
+      && ls -l BootApp.efi TestBootApp.efi esp.img symbols/*.dll symbols/*.map \
       | awk '{printf "%-24s %s bytes\n", $NF, $5}' )
 } > "${OUT}/buildinfo.txt"
 rm -f "${OUT}/container-fragment.txt"
 
 log "done:"
-( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi )
+( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi esp.img )
 log "buildinfo written to ${OUT}/buildinfo.txt"
