@@ -96,8 +96,11 @@ make -C "$EDK2/BaseTools" -j"$(nproc)" \
 # ENV(CLANG35_BIN), ENV(FUSE_LD), ENV(MAKEPATH) for the CLANG35 toolchain:
 #   SLINK/RC/OBJCOPY = ENV(CLANG35_BIN)llvm-ar / llvm-objcopy
 #   DLINK2_FLAGS end with -fuse-ld=ENV(FUSE_LD)
-export CLANG35_BIN=/usr/bin/
-export FUSE_LD=/usr/bin/ld.lld
+# The shared container provides the unversioned toolchain names
+# (clang/ld.lld/llvm-*) as /usr/local/bin symlinks to the -21 versions;
+# make stays at /usr/bin/make (only the toolchain is symlinked).
+export CLANG35_BIN=/usr/local/bin/
+export FUSE_LD=/usr/local/bin/ld.lld
 export MAKEPATH=/usr/bin/
 export CLANG_EXTRA_DLINK_FLAGS=
 CLANG_MAJOR="$(clang --version | sed -n '1s/.*clang version \([0-9]*\)\..*/\1/p')"
