@@ -53,8 +53,8 @@ SDE="$(git -C "${META}" log -1 --format=%ct HEAD 2>/dev/null || date +%s)"
 if [ -d "${OUT}/build/src" ]; then INCREMENTAL=yes; else INCREMENTAL=no; fi
 
 mkdir -p "${OUT}"
-rm -f "${OUT}/BootApp.efi" "${OUT}/TestBootApp.efi" "${OUT}/esp.img" \
-      "${OUT}/container-fragment.txt" "${OUT}/buildinfo.txt"
+rm -f "${OUT}/BootApp.efi" "${OUT}/TestBootApp.efi" "${OUT}/BootUtil.efi" \
+      "${OUT}/esp.img" "${OUT}/container-fragment.txt" "${OUT}/buildinfo.txt"
 rm -rf "${OUT}/symbols"
 
 log "building TARGET=${TARGET} (SOURCE_DATE_EPOCH=${SDE}, incremental=${INCREMENTAL})"
@@ -70,6 +70,7 @@ EXTRA_MOUNTS="--network=none -v ${META}:/work/src:ro -v ${OUT}:/work/out" \
 
 test -s "${OUT}/BootApp.efi"
 test -s "${OUT}/TestBootApp.efi"
+test -s "${OUT}/BootUtil.efi"
 test -s "${OUT}/esp.img"
 test -s "${OUT}/container-fragment.txt"
 
@@ -157,12 +158,12 @@ repo_section() {  # $1 = section title, $2 = repo path
   echo "# CodeView debug entry points at) and the linker map for addr->symbol"
   echo "# resolution of on-device crash addresses; the .efi themselves carry"
   echo "# no symbol table (GenFw drops it in the ELF->PE conversion)."
-  ( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi esp.img symbols/*.dll symbols/*.map \
-      && ls -l BootApp.efi TestBootApp.efi esp.img symbols/*.dll symbols/*.map \
+  ( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi BootUtil.efi esp.img symbols/*.dll symbols/*.map \
+      && ls -l BootApp.efi TestBootApp.efi BootUtil.efi esp.img symbols/*.dll symbols/*.map \
       | awk '{printf "%-24s %s bytes\n", $NF, $5}' )
 } > "${OUT}/buildinfo.txt"
 rm -f "${OUT}/container-fragment.txt"
 
 log "done:"
-( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi esp.img )
+( cd "${OUT}" && sha256sum BootApp.efi TestBootApp.efi BootUtil.efi esp.img )
 log "buildinfo written to ${OUT}/buildinfo.txt"

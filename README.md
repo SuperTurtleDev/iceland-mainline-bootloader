@@ -22,12 +22,14 @@ Layout:
 defaults to `../../build/bootloader` relative to this repository. Other
 knobs: `BOOTLOADER_TARGET=DEBUG`, `BOOTLOADER_CLEAN=1` (wipe `OUT/build`).
 
-Outputs: `BootApp.efi`, `TestBootApp.efi`, `esp.img` (FAT32, 1 GiB, Android
-sparse image carrying `/EFI/BOOT/BOOTAA64.EFI` = BootApp.efi, for fastboot
-flashing to the ESP partition), `symbols/` (link-time ELF `.dll` with DWARF +
-linker maps — the `.efi` carry no symbol table) and `buildinfo.txt`
-(meta-repo/submodule/container commit hashes, dirty diffs, toolchain
-versions, artifact hashes).
+Outputs: `BootApp.efi`, `TestBootApp.efi`, `BootUtil.efi` (on-screen probe
+of KernelBaseAddr/KernelSize variables, the ABL boot window and the max
+initrd capacity - run it from the boot menu), `esp.img` (FAT32, 1 GiB,
+Android sparse image carrying `/EFI/BOOT/BOOTAA64.EFI` = BootApp.efi, for
+fastboot flashing to the ESP partition), `symbols/` (link-time ELF `.dll`
+with DWARF + linker maps — the `.efi` carry no symbol table) and
+`buildinfo.txt` (meta-repo/submodule/container commit hashes, dirty diffs,
+toolchain versions, artifact hashes).
 
 The build runs `--network=none` with `SOURCE_DATE_EPOCH` pinned to the
 meta-repo commit timestamp; clean rebuilds (`BOOTLOADER_CLEAN=1`) from the

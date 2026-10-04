@@ -1,0 +1,38 @@
+## @file BootUtil.inf
+#
+#  On-screen boot-environment probe: KernelBaseAddr/KernelSize UEFI
+#  variables, the ABL boot window and the resulting max initrd capacity.
+#
+#  SPDX-License-Identifier: BSD-3-Clause-Clear
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = BootUtil
+  FILE_GUID                      = 9DA51979-F5D9-4094-9431-5244CB2F2276
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = BootUtilEntry
+
+[Sources]
+  BootUtil.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+  MainlineBootLib
+
+[Guids]
+  gQcomTokenSpaceGuid

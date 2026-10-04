@@ -128,6 +128,7 @@ build -p MainlineBootPkg/MainlineBootPkg.dsc -a "$ARCH" -t "$TOOLCHAIN" -b "$TAR
 # .../AARCH64/MainlineBootPkg/Application/BootApp/BootApp/OUTPUT/BootApp.efi
 # The sibling DEBUG/ dir holds the link artifacts: <APP>.dll (ELF + DWARF
 # symbols, referenced by the .efi's CodeView debug entry) and <APP>.map.
+# BootUtil is a diagnostic probe (no symbols exported, not in the ESP/FV).
 mkdir -p "$OUT/symbols"
 for APP in BootApp TestBootApp; do
   MOD_DIR="$WORKSPACE/Build/MainlineBoot/${TARGET}_${TOOLCHAIN}/${ARCH}/MainlineBootPkg/Application/$APP/$APP"
@@ -139,6 +140,10 @@ for APP in BootApp TestBootApp; do
   cp "$MOD_DIR/DEBUG/$APP.dll" "$OUT/symbols/$APP.dll"
   cp "$MOD_DIR/DEBUG/$APP.map" "$OUT/symbols/$APP.map"
 done
+MOD_DIR="$WORKSPACE/Build/MainlineBoot/${TARGET}_${TOOLCHAIN}/${ARCH}/MainlineBootPkg/Application/BootUtil/BootUtil"
+EFI="$(find "$MOD_DIR" -type f -name "BootUtil.efi" -path '*OUTPUT*' | head -1)"
+test -n "$EFI" && test -s "$EFI"
+cp "$EFI" "$OUT/BootUtil.efi"
 
 # --- ESP image (FAT32, Android sparse) -----------------------------------------
 # Production deployment: the BDS launches <esp>:\EFI\BOOT\BOOTAA64.EFI

@@ -87,3 +87,4 @@
 [Components.common]
   MainlineBootPkg/Application/TestBootApp/TestBootApp.inf
 MainlineBootPkg/Application/BootApp/BootApp.inf
+MainlineBootPkg/Application/BootUtil/BootUtil.inf
