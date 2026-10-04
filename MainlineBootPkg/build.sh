@@ -63,6 +63,17 @@ fi
 
 EDK2="$WORK/src/edk2"
 
+# The edk2 Build tree bakes SOURCE_DATE_EPOCH-derived bytes (__DATE__ etc.)
+# into objects; a stale tree would mix objects from an older pin and diverge
+# from a clean rebuild.  Wipe just Build/ when the pin moves -- the source
+# copy and the built BaseTools stay, so this costs only the ~8s module build.
+SDE_STAMP="$WORK/src.sde-stamp"
+if [ "$(cat "$SDE_STAMP" 2>/dev/null || true)" != "$SOURCE_DATE_EPOCH" ]; then
+    echo "build.sh: SOURCE_DATE_EPOCH changed -> wiping edk2 Build tree"
+    rm -rf "$EDK2/Build"
+    printf '%s\n' "$SOURCE_DATE_EPOCH" > "$SDE_STAMP"
+fi
+
 # --- edk2 build environment --------------------------------------------------
 # Classic ABL layout: WORKSPACE = edk2 tree, MainlineBootPkg resolved through
 # PACKAGES_PATH (its parent dir, i.e. the scratch copy of the meta repo).
