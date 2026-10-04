@@ -1,0 +1,2 @@
+# Local build outputs (default OUT) — deliverable builds pass OUT explicitly.
+/build/

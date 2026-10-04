@@ -1,0 +1,45 @@
+## @file BootApp.inf
+#
+#  Production bootloader: GPT-partition-loaded MainlineBoot (BOOTAA64.EFI).
+#
+#  SPDX-License-Identifier: BSD-3-Clause-Clear
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = BootApp
+  FILE_GUID                      = 9E2B1A44-77B1-4A0F-AC59-3C0E6CB8A215
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.3
+  ENTRY_POINT                    = BootAppEntry
+
+[Sources]
+  BootApp.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  MemoryAllocationLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  MainlineBootLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid           ## CONSUMES
+  gEfiDevicePathProtocolGuid        ## CONSUMES
+  gEfiPartitionInfoProtocolGuid     ## CONSUMES
+  gEfiPartitionRecordGuid           ## CONSUMES
+  gEfiPartitionTypeGuid             ## CONSUMES
+  gEfiSimpleFileSystemProtocolGuid  ## SOMETIMES_CONSUMES
+
+[Guids]
+  gEfiFileSystemInfoGuid            ## CONSUMES (ABL CompareVolumeLabel copy)

@@ -1,0 +1,52 @@
+## @file MainlineBootLib.inf
+#
+#  ABL-style mainline Linux loader library (Image + DTB + initrd + cmdline).
+#
+#  SPDX-License-Identifier: BSD-3-Clause-Clear
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = MainlineBootLib
+  FILE_GUID                      = 18412048-A1B2-46D0-AE55-55C8D9E87733
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  LIBRARY_CLASS                  = MainlineBootLib|UEFI_APPLICATION UEFI_DRIVER DXE_DRIVER
+
+[Sources]
+  MainlineBootInternal.h
+  MainlineBootCore.h
+  MainlineBootCore.c
+  MainlineBootLib.c
+  MainlineBootFdt.c
+  MainlineBootJump.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  ArmPkg/ArmPkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  PrintLib
+  UefiLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  FdtLib
+  ArmLib
+  CacheMaintenanceLib
+
+[Guids]
+  gQcomTokenSpaceGuid           ## CONSUMES  (L"KernelBaseAddr" / L"KernelSize" variables)
+  gEfiRNGAlgRawGuid             ## CONSUMES  (EFI_RNG_ALGORITHM_RAW, QcomModulePkg.dec)
+
+[Protocols]
+  gEfiRamPartitionProtocolGuid  ## CONSUMES
+  gEfiGraphicsOutputProtocolGuid ## SOMETIMES_CONSUMES (GOP -> simple-framebuffer handoff)
+  gQcomRngProtocolGuid          ## SOMETIMES_CONSUMES (same GUID value as MdePkg gEfiRngProtocolGuid)

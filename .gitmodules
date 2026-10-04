@@ -1,0 +1,4 @@
+[submodule "edk2"]
+	path = edk2
+	url = https://git.codelinaro.org/clo/la/abl/tianocore/edk2.git
+	branch = uefi.lnx.6.0.r49-rel

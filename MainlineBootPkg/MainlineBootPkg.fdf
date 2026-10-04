@@ -1,0 +1,81 @@
+## @file MainlineBootPkg.fdf
+#
+#  Flash layout for MainlineBootPkg. This is QcomModulePkg.fdf with the
+#  LinuxLoader INF swapped for TestBootApp so the resulting FVMAIN_COMPACT.Fv
+#  can be wrapped by QcomModulePkg/Tools/image_header.py into an "abl"
+#  partition ELF exactly like the stock ABL build does.
+#
+#  SPDX-License-Identifier: BSD-3-Clause-Clear
+##
+
+[FD.MainlineBoot_EFI]
+BaseAddress   = 0x80200000|gEmbeddedTokenSpaceGuid.PcdEmbeddedFdBaseAddress  #The base address of the FLASH Device.
+Size          = 0x0003E000|gEmbeddedTokenSpaceGuid.PcdEmbeddedFdSize         #The size in bytes of the FLASH Device
+ErasePolarity = 1
+BlockSize     = 0x200
+NumBlocks     = 0x1F0
+
+# 512 bytes of configuration header & 8 bytes of image header
+0x00000000|0x0003E000
+gEmbeddedTokenSpaceGuid.PcdFlashFvMainBase|gEmbeddedTokenSpaceGuid.PcdFlashFvMainSize
+FV = FVMAIN_COMPACT
+
+[FV.FVMAIN]
+BlockSize          = 0x40
+NumBlocks          = 0         # This FV gets compressed so make it just big enough
+FvAlignment        = 8         # FV alignment and FV attributes setting.
+ERASE_POLARITY     = 1
+MEMORY_MAPPED      = TRUE
+STICKY_WRITE       = TRUE
+LOCK_CAP           = TRUE
+LOCK_STATUS        = TRUE
+WRITE_DISABLED_CAP = TRUE
+WRITE_ENABLED_CAP  = TRUE
+WRITE_STATUS       = TRUE
+WRITE_LOCK_CAP     = TRUE
+WRITE_LOCK_STATUS  = TRUE
+READ_DISABLED_CAP  = TRUE
+READ_ENABLED_CAP   = TRUE
+READ_STATUS        = TRUE
+READ_LOCK_CAP      = TRUE
+READ_LOCK_STATUS   = TRUE
+FvNameGuid         = 046fae99-cf2e-49ed-a6a8-a1488b7e80d3
+
+INF MainlineBootPkg/Application/TestBootApp/TestBootApp.inf
+
+[FV.FVMAIN_COMPACT]
+FvAlignment        = 8
+ERASE_POLARITY     = 1
+MEMORY_MAPPED      = TRUE
+STICKY_WRITE       = TRUE
+LOCK_CAP           = TRUE
+LOCK_STATUS        = TRUE
+WRITE_DISABLED_CAP = TRUE
+WRITE_ENABLED_CAP  = TRUE
+WRITE_STATUS       = TRUE
+WRITE_LOCK_CAP     = TRUE
+WRITE_LOCK_STATUS  = TRUE
+READ_DISABLED_CAP  = TRUE
+READ_ENABLED_CAP   = TRUE
+READ_STATUS        = TRUE
+READ_LOCK_CAP      = TRUE
+READ_LOCK_STATUS   = TRUE
+
+  FILE FV_IMAGE = 9E21FD93-9C72-4c15-8C4B-E77F1DB2D792 {
+    SECTION GUIDED EE4E5898-3914-4259-9D6E-DC7BD79403CF PROCESSING_REQUIRED = TRUE {
+      SECTION FV_IMAGE = FVMAIN
+    }
+  }
+
+[Rule.Common.UEFI_APPLICATION]
+  FILE APPLICATION = $(NAMED_GUID) {
+    UI     STRING ="$(MODULE_NAME)" Optional
+    PE32   PE32                    |.efi
+  }
+
+[Rule.Common.UEFI_APPLICATION.BINARY]
+  FILE APPLICATION = $(NAMED_GUID) {
+    DXE_DEPEX    DXE_DEPEX Optional      |.depex
+    PE32         PE32                    |.efi
+    UI           STRING="$(MODULE_NAME)" Optional
+  }

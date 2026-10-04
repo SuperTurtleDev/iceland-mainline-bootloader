@@ -1,0 +1,52 @@
+## @file TestBootApp.inf
+#
+#  USB fastboot "flashless boot" front-end for MainlineBootLib.
+#
+#  SPDX-License-Identifier: BSD-3-Clause-Clear
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = TestBootApp
+  FILE_GUID                      = 0C7D5F1E-6B7A-4B1C-9F2E-3A1D2C4B5E6F
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = TestBootAppEntry
+
+[Sources]
+  TestBootApp.c
+  TestBootFastboot.c
+  TestBootFastboot.h
+  UsbDescriptors.c
+  UsbDescriptors.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  ArmPkg/ArmPkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  PrintLib
+  MemoryAllocationLib
+  MainlineBootLib
+
+[Guids]
+  gQcomTokenSpaceGuid
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid ## SOMETIMES_CONSUMES
+  gEfiUsbDeviceProtocolGuid     ## CONSUMES
+  gEfiChipInfoProtocolGuid      ## SOMETIMES_CONSUMES (USB serial string)
+
+[Depex]
+  TRUE

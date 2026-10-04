@@ -1,0 +1,20 @@
+## @file MainlineBootPkg.dec
+#
+#  Package declaration for MainlineBootPkg.  All GUIDs/protocols consumed by
+#  the modules live in QcomModulePkg.dec / MdePkg.dec; this DEC only exports
+#  the MainlineBootLib class declaration header.
+#
+#  SPDX-License-Identifier: BSD-3-Clause-Clear
+##
+
+[Defines]
+  PACKAGE_NAME                   = MainlineBootPkg
+  PACKAGE_GUID                  = F7B10A68-3190-482F-9919-331A98880605
+  PACKAGE_VERSION               = 0.1
+
+[Includes]
+  Include
+
+[LibraryClasses]
+  ##  ABL-style mainline Linux loader library (Image + DTB + initrd + cmdline).
+  MainlineBootLib|Include/Library/MainlineBootLib.h
