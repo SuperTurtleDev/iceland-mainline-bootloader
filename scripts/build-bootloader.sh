@@ -96,6 +96,7 @@ SDE="$(git -C "$REPO" log -1 --format=%ct HEAD 2>/dev/null || date +%s)"
 mkdir -p "$OUT"
 rm -f "$OUT/BootApp.efi" "$OUT/TestBootApp.efi" \
       "$OUT/container-fragment.txt" "$OUT/buildinfo.txt"
+rm -rf "$OUT/symbols"
 
 msg "building TARGET=$TARGET in $IMAGE:$TAG (SOURCE_DATE_EPOCH=$SDE)"
 podman run --rm --network=none \
@@ -137,7 +138,13 @@ test -s "$OUT/container-fragment.txt"
   cat "$OUT/container-fragment.txt"
   echo
   echo "----- artifacts -----"
-  ( cd "$OUT" && sha256sum BootApp.efi TestBootApp.efi && ls -l BootApp.efi TestBootApp.efi | awk '{printf "%-16s %s bytes\n", $NF, $5}' )
+  echo "# symbols/ holds the link-time ELF (.dll, with DWARF - what the .efi's"
+  echo "# CodeView debug entry points at) and the linker map for addr->symbol"
+  echo "# resolution of on-device crash addresses; the .efi themselves carry"
+  echo "# no symbol table (GenFw drops it in the ELF->PE conversion)."
+  ( cd "$OUT" && sha256sum BootApp.efi TestBootApp.efi symbols/*.dll symbols/*.map \
+      && ls -l BootApp.efi TestBootApp.efi symbols/*.dll symbols/*.map \
+      | awk '{printf "%-24s %s bytes\n", $NF, $5}' )
 } > "$OUT/buildinfo.txt"
 rm -f "$OUT/container-fragment.txt"
 

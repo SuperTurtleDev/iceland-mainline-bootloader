@@ -91,11 +91,18 @@ build -p MainlineBootPkg/MainlineBootPkg.dsc -a "$ARCH" -t "$TOOLCHAIN" -b "$TAR
 
 # Module outputs keep their package path, e.g.
 # .../AARCH64/MainlineBootPkg/Application/BootApp/BootApp/OUTPUT/BootApp.efi
+# The sibling DEBUG/ dir holds the link artifacts: <APP>.dll (ELF + DWARF
+# symbols, referenced by the .efi's CodeView debug entry) and <APP>.map.
+mkdir -p "$OUT/symbols"
 for APP in BootApp TestBootApp; do
-  EFI="$(find "$WORKSPACE/Build/MainlineBoot/${TARGET}_${TOOLCHAIN}/${ARCH}" \
-             -type f -name "$APP.efi" -path '*OUTPUT*' | head -1)"
+  MOD_DIR="$WORKSPACE/Build/MainlineBoot/${TARGET}_${TOOLCHAIN}/${ARCH}/MainlineBootPkg/Application/$APP/$APP"
+  EFI="$(find "$MOD_DIR" -type f -name "$APP.efi" -path '*OUTPUT*' | head -1)"
   test -n "$EFI" && test -s "$EFI"
   cp "$EFI" "$OUT/$APP.efi"
+  test -s "$MOD_DIR/DEBUG/$APP.dll"
+  test -s "$MOD_DIR/DEBUG/$APP.map"
+  cp "$MOD_DIR/DEBUG/$APP.dll" "$OUT/symbols/$APP.dll"
+  cp "$MOD_DIR/DEBUG/$APP.map" "$OUT/symbols/$APP.map"
 done
 
 # --- toolchain fragment for buildinfo.txt --------------------------------------
