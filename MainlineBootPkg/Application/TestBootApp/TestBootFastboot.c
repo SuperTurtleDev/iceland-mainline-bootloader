@@ -286,6 +286,16 @@ GetVarValue (
     AsciiStrCpyS (Value, ValueMax, mSerial);
   } else if (AsciiStrCmp (Name, "max-download-size") == 0) {
     AsciiStrCpyS (Value, ValueMax, mMaxDownloadStr);
+  } else if (AsciiStrCmp (Name, "window") == 0) {
+    MAINLINE_BOOT_INFO  W;
+    if (!EFI_ERROR (MainlineBootGetInfo (&W))) {
+      AsciiSPrint (Value, ValueMax, "0x%lx+0x%lx src=%a",
+                  W.KernelBaseAddr, W.KernelSizeReserved,
+                  W.KernelParamsFromCfg ? "bootcfg"
+                  : W.KernelParamsFromUefiVars ? "uefi-vars" : "fallback");
+    } else {
+      AsciiStrCpyS (Value, ValueMax, "not-initialized");
+    }
   } else if (AsciiStrCmp (Name, "is-userspace") == 0) {
     AsciiStrCpyS (Value, ValueMax, "no");
   } else if (AsciiStrCmp (Name, "kernel") == 0) {
@@ -337,7 +347,7 @@ CmdGetVarAll (
 {
   STATIC CONST CHAR8 *Names[] = {
     "version", "version-bootloader", "product", "serialno", "max-download-size",
-    "is-userspace", "kernel", "secure", "unlocked", "slot-count",
+    "window", "is-userspace", "kernel", "secure", "unlocked", "slot-count",
     "has-slot:kernel", "partition-type:kernel", "partition-size:kernel",
   };
   CHAR8  Line[MAX_RSP_SIZE];
@@ -591,6 +601,12 @@ CmdOemStatus (
   AsciiSPrint (Line, sizeof (Line), "kernel %a %lu B img 0x%lx",
                Info.KernelLoaded ? "yes" : "no", (UINT64)Info.KernelFileSize,
                Info.KernelImageSize);
+  FastbootInfo (Line); WaitForTransferComplete ();
+  AsciiSPrint (Line, sizeof (Line),
+               "window 0x%lx+0x%lx src=%a",
+               Info.KernelBaseAddr, Info.KernelSizeReserved,
+               Info.KernelParamsFromCfg ? "bootcfg"
+               : Info.KernelParamsFromUefiVars ? "uefi-vars" : "fallback");
   FastbootInfo (Line); WaitForTransferComplete ();
   AsciiSPrint (Line, sizeof (Line), "dtb %a %lu B  initrd %a %lu B",
                Info.DtbLoaded ? "yes" : "no", (UINT64)Info.DtbSize,

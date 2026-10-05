@@ -63,8 +63,16 @@ MainlineBootLoadKernel (
 /**
   Load a text boot configuration. Lines are split on '\n' / "\r\n"; empty
   lines and lines starting with '#' are ignored; the value of the last
-  "cmdline=" line becomes the kernel command line (max 4095 chars). Other
-  keys are logged and ignored.
+  "cmdline=" line becomes the kernel command line (max 4095 chars).
+
+  Additional keys (applied even without a "cmdline=" line):
+    kernel-base=<val>   boot window base address for this boot
+    kernel-size=<val>   boot window size for this boot
+  where <val> is 0x-prefixed hex, decimal, or decimal/mixed with a k/K, m/M
+  (MiB) or g/G (GiB) suffix, e.g. "0x80000000" or "768M".  Priority:
+  bootcfg keys > L"KernelBaseAddr"/L"KernelSize" UEFI variables > the ABL
+  fallback (BaseMemory / 0x05600000).  A bootcfg without these keys resets
+  the window to the platform default.
 
   @retval EFI_NOT_FOUND  No "cmdline=" line present.
 **/
@@ -121,6 +129,7 @@ typedef struct {
   UINT64    KernelBaseAddr;
   UINT64    KernelSizeReserved;
   BOOLEAN   KernelParamsFromUefiVars;
+  BOOLEAN   KernelParamsFromCfg;   /* bootcfg kernel-base=/kernel-size= won */
 
   BOOLEAN   KernelLoaded;
   UINTN     KernelFileSize;

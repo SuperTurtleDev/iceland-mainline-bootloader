@@ -132,9 +132,13 @@ BootUtilEntry (
   BuPrintMiB (L"KernelBaseAddr", Info.KernelBaseAddr);
   BuPrintMiB (L"KernelSizeReserved", Info.KernelSizeReserved);
   Print (L"  source: %s\r\n",
-         Info.KernelParamsFromUefiVars
-           ? L"UEFI variables (KernelBaseAddr/KernelSize)"
-           : L"FALLBACK - variables MISSING, ABL default 0x05600000 (86 MiB)");
+         Info.KernelParamsFromCfg
+           ? L"bootcfg override (kernel-base=/kernel-size=)"
+           : Info.KernelParamsFromUefiVars
+               ? L"UEFI variables (KernelBaseAddr/KernelSize)"
+               : L"FALLBACK - variables MISSING, ABL default 0x05600000 (86 MiB)");
+  Print (L"  (window overridable per boot via the bootcfg partition:\r\n"
+         L"   kernel-base=<0x...|decimal|NNNM> / kernel-size=<...>)\r\n");
 
   if (!HaveBase || !HaveSize) {
     Print (L"\r\n[BOOTUTIL] NOTE: variables missing -> initrd capacity below"

@@ -846,7 +846,9 @@ BootAppEntry (
   }
 
   /* 4. bootcfg (text ini, optional): absent partition or a file without a
-   *    "cmdline=" line both just mean "boot without cmdline". */
+   *    "cmdline=" line both just mean "boot without cmdline".  The optional
+   *    kernel-base=/kernel-size= keys override the ABL boot window (see
+   *    MainlineBootLoadBootcfg). */
   Status = BootAppLoadPayload (BA_BOOTCFG_LABEL, MainlineBootLoadBootcfg,
                                L"bootcfg");
   if (Status == EFI_NOT_FOUND) {

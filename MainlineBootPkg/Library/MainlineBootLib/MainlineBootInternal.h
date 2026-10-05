@@ -32,9 +32,12 @@ typedef struct {
   RamPartitionEntry    *RamPartitions;      /* AllocateZeroPool'd, NumRamPartitions entries */
   UINT32                NumRamPartitions;
   UINT64                BaseMemory;
-  UINT64                KernelBaseAddr;
+  UINT64                KernelBaseAddr;     /* effective window (cfg override applied) */
   UINT64                KernelSizeReserved;
   BOOLEAN               KernelParamsFromUefiVars;
+  BOOLEAN               KernelParamsFromCfg;
+  UINT64                PlatKernelBaseAddr;      /* platform defaults decided by Init */
+  UINT64                PlatKernelSizeReserved;  /* (UEFI vars or ABL fallback) */
 
   /* ---- images ---- */
   VOID                 *Kernel;

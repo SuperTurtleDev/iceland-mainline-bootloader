@@ -237,6 +237,12 @@ MainlineBootInit (
             "found, falling back to BaseMemory 0x%lx / 0x%x (ABL default)\n",
             gMlb.KernelBaseAddr, MLB_FALLBACK_KERNEL_SIZE));
   }
+  /* Platform default = what Init decided (UEFI vars, else ABL fallback).
+   * A bootcfg kernel-base=/kernel-size= override replaces the effective
+   * window for this boot; every LoadBootcfg first resets to these. */
+  gMlb.PlatKernelBaseAddr = gMlb.KernelBaseAddr;
+  gMlb.PlatKernelSizeReserved = gMlb.KernelSizeReserved;
+  gMlb.KernelParamsFromCfg = FALSE;
 
   gMlb.Initialized = TRUE;
   return EFI_SUCCESS;
@@ -396,6 +402,46 @@ MainlineBootLoadInitrd (
   return EFI_SUCCESS;
 }
 
+/* Parse a bootcfg numeric value: 0x-prefixed hex, decimal, with optional
+ * k/K (1024), m/M (MiB), g/G (GiB) suffix, e.g. "0x80000000", "768M". */
+STATIC BOOLEAN
+MlbParseU64Value (
+  IN  CONST CHAR8  *Val,
+  IN  UINTN        ValLen,
+  OUT UINT64       *Out
+  )
+{
+  CHAR8  V[24];
+  UINTN  N = ValLen;
+  UINT64 Mult = 1;
+  UINT64 Num;
+
+  if (N == 0 || N >= sizeof (V)) {
+    return FALSE;
+  }
+  if (Val[N - 1] == 'k' || Val[N - 1] == 'K') { Mult = 1024ULL;              N--; }
+  else if (Val[N - 1] == 'm' || Val[N - 1] == 'M') { Mult = 1024ULL * 1024;      N--; }
+  else if (Val[N - 1] == 'g' || Val[N - 1] == 'G') { Mult = 1024ULL * 1024 * 1024; N--; }
+  if (N == 0) {
+    return FALSE;
+  }
+  CopyMem (V, Val, N);
+  V[N] = '\0';
+  if (N > 2 && V[0] == '0' && (V[1] == 'x' || V[1] == 'X')) {
+    Num = AsciiStrHexToUint64 (V);
+  } else {
+    Num = AsciiStrDecimalToUint64 (V);
+  }
+  /* both parsers return 0 on garbage */
+  if (Num == 0) {
+    return FALSE;
+  }
+  *Out = Num * Mult;
+  return TRUE;
+}
+
+/* bootcfg "other" keys: kernel-base= / kernel-size= override the ABL boot
+ * window for this boot (priority: bootcfg > UEFI vars > ABL fallback). */
 STATIC VOID
 MlbBootcfgOtherKey (
   IN CONST CHAR8  *Key,
@@ -405,13 +451,36 @@ MlbBootcfgOtherKey (
   IN VOID         *Context
   )
 {
-  CHAR8  K[32];
-  UINTN  N = KeyLen < sizeof (K) - 1 ? KeyLen : sizeof (K) - 1;
+  UINT64  Num;
 
-  CopyMem (K, Key, N);
-  K[N] = '\0';
-  DEBUG ((EFI_D_INFO, "MainlineBoot: bootcfg: ignoring key '%a' (%lu byte value)\n",
-          K, (UINT64)ValueLen));
+  if (KeyLen == 11 && MlbMemCmp (Key, "kernel-base", 11) == 0) {
+    if (!MlbParseU64Value (Value, ValueLen, &Num)) {
+      DEBUG ((EFI_D_ERROR,
+              "MainlineBoot: bootcfg: bad kernel-base value (ignored)\n"));
+      return;
+    }
+    gMlb.KernelBaseAddr = Num;
+    gMlb.KernelParamsFromCfg = TRUE;
+    DEBUG ((EFI_D_INFO, "MainlineBoot: bootcfg: kernel-base = 0x%lx\n", Num));
+  } else if (KeyLen == 11 && MlbMemCmp (Key, "kernel-size", 11) == 0) {
+    if (!MlbParseU64Value (Value, ValueLen, &Num)) {
+      DEBUG ((EFI_D_ERROR,
+              "MainlineBoot: bootcfg: bad kernel-size value (ignored)\n"));
+      return;
+    }
+    gMlb.KernelSizeReserved = Num;
+    gMlb.KernelParamsFromCfg = TRUE;
+    DEBUG ((EFI_D_INFO, "MainlineBoot: bootcfg: kernel-size = 0x%lx\n", Num));
+  } else {
+    CHAR8  K[32];
+    UINTN  N = KeyLen < sizeof (K) - 1 ? KeyLen : sizeof (K) - 1;
+
+    CopyMem (K, Key, N);
+    K[N] = '\0';
+    DEBUG ((EFI_D_INFO,
+            "MainlineBoot: bootcfg: ignoring key '%a' (%lu byte value)\n",
+            K, (UINT64)ValueLen));
+  }
 }
 
 EFI_STATUS
@@ -428,6 +497,15 @@ MainlineBootLoadBootcfg (
     return EFI_INVALID_PARAMETER;
   }
 
+  /* Re-apply from the platform defaults: a bootcfg without kernel-base=/
+   * kernel-size= keys must not inherit a previous file's override.  The
+   * keys fire through MlbBootcfgOtherKey() during MlbParseBootcfg() below,
+   * so they take effect even when the file has no 'cmdline=' line. */
+  gMlb.KernelBaseAddr = gMlb.PlatKernelBaseAddr;
+  gMlb.KernelSizeReserved = gMlb.PlatKernelSizeReserved;
+  gMlb.KernelParamsFromCfg = FALSE;
+
+  CmdLine = AllocateZeroPool (MLB_MAX_CMDLINE_LEN);
   CmdLine = AllocateZeroPool (MLB_MAX_CMDLINE_LEN);
   if (CmdLine == NULL) {
     return EFI_OUT_OF_RESOURCES;
@@ -486,6 +564,7 @@ MainlineBootGetInfo (
   Info->KernelBaseAddr           = gMlb.KernelBaseAddr;
   Info->KernelSizeReserved       = gMlb.KernelSizeReserved;
   Info->KernelParamsFromUefiVars = gMlb.KernelParamsFromUefiVars;
+  Info->KernelParamsFromCfg      = gMlb.KernelParamsFromCfg;
 
   Info->KernelLoaded     = (gMlb.Kernel != NULL);
   Info->KernelFileSize   = gMlb.KernelSize;
