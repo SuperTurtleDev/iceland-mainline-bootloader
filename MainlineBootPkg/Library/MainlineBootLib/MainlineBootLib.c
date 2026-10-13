@@ -774,9 +774,11 @@ MainlineBootBoot (
             Status));
     return Status;
   }
-  Print (L"[BOOTAPP] dtb updated: kernel %lu, initrd %lu, cmdline %a\r\n",
-         (UINT64)gMlb.KernelSize, (UINT64)gMlb.InitrdSize,
-         gMlb.CmdLineLoaded ? "yes" : "no");
+  /* screen stays quiet on the success path (debug port only) */
+  DEBUG ((EFI_D_INFO,
+          "MainlineBoot: dtb updated: kernel %lu, initrd %lu, cmdline %a\n",
+          (UINT64)gMlb.KernelSize, (UINT64)gMlb.InitrdSize,
+          gMlb.CmdLineLoaded ? "yes" : "no"));
 
   /* --- 5. turn off display before kernel handoff ---
    * The panel must not be left in ABL's state during the kernel transition.
@@ -810,9 +812,6 @@ MainlineBootBoot (
           L.KernelLoadAddr, L.DeviceTreeLoadAddr,
           InitrdAddr ? "" : " (no initrd)"));
   DEBUG ((EFI_D_INFO, "MainlineBoot: shutting down UEFI boot services\n"));
-  Print (L"[BOOTAPP] entry 0x%lx, dtb 0x%lx, initrd 0x%lx\r\n"
-         L"[BOOTAPP] shutting down boot services...\r\n",
-         L.KernelLoadAddr, L.DeviceTreeLoadAddr, InitrdAddr);
 
   Status = MlbShutdownUefiBootServices ();
   if (EFI_ERROR (Status)) {

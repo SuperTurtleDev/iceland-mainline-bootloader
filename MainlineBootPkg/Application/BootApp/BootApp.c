@@ -768,18 +768,15 @@ BootAppLoadPayload (
   UINTN       Size;
   VOID        *Stage;
 
-  Print (L"[BOOTAPP] %s: reading '%s' partition...\r\n", What, Label);
-
   Status = BootAppReadPayload (Label, &Payload, &Size, &Stage);
   if (Status == EFI_NOT_FOUND) {
-    Print (L"[BOOTAPP] %s: partition '%s' not found\r\n", What, Label);
+    /* quiet: for required payloads BootAppFail() below reports the status;
+     * for the optional ones (bootcfg/initrd) absence is normal. */
     return Status;
   }
   if (EFI_ERROR (Status)) {
     return Status;
   }
-
-  Print (L"[BOOTAPP] %s: %lu bytes, loading\r\n", What, (UINT64)Size);
 
   Status = LoadFn (Payload, Size);
   FreePool (Stage);
@@ -806,12 +803,12 @@ BootAppEntry (
   (VOID)ImageHandle;
   (VOID)SystemTable;
 
-  Print (L"\r\n[BOOTAPP] BootApp v%a (built %a %a) - mainline disk boot\r\n",
-         BA_VERSION_STRING, __DATE__, __TIME__);
+  /* Silent boot: nothing is printed on the way to the kernel - only
+   * failures reach the screen (BootAppFail + the [BOOTAPP] error context
+   * above).  Progress remains on the debug port via DEBUG(). */
 
   /* 0. Make sure every controller is connected so all GPT partitions
    *    carry BlockIo handles (see BootAppConnectAllControllers). */
-  Print (L"[BOOTAPP] connecting controllers...\r\n");
   BootAppConnectAllControllers ();
 
   BlkIoHandles = NULL;
@@ -819,14 +816,12 @@ BootAppEntry (
   if (!EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
                                            &gEfiBlockIoProtocolGuid, NULL,
                                            &BlkIoCount, &BlkIoHandles))) {
-    Print (L"[BOOTAPP] %u block devices online\r\n", (UINT32)BlkIoCount);
     if (BlkIoHandles != NULL) {
       FreePool (BlkIoHandles);
     }
   }
 
   /* 1. Platform boot parameters (RAM partitions, kernel load region). */
-  Print (L"[BOOTAPP] MainlineBootInit...\r\n");
   Status = MainlineBootInit ();
   if (EFI_ERROR (Status)) {
     return BootAppFail (L"MainlineBootInit", Status);
@@ -852,7 +847,7 @@ BootAppEntry (
   Status = BootAppLoadPayload (BA_BOOTCFG_LABEL, MainlineBootLoadBootcfg,
                                L"bootcfg");
   if (Status == EFI_NOT_FOUND) {
-    Print (L"[BOOTAPP] bootcfg is optional - continuing without cmdline\r\n");
+    /* quiet: no bootcfg == no cmdline, normal */
   } else if (EFI_ERROR (Status)) {
     return BootAppFail (L"bootcfg payload", Status);
   }
@@ -861,14 +856,14 @@ BootAppEntry (
   Status = BootAppLoadPayload (BA_INITRD_LABEL, MainlineBootLoadInitrd,
                                L"initrd");
   if (Status == EFI_NOT_FOUND) {
-    Print (L"[BOOTAPP] initrd is optional - continuing without initrd\r\n");
+    /* quiet: no initrd is normal */
   } else if (EFI_ERROR (Status)) {
     return BootAppFail (L"initrd payload", Status);
   }
 
-  /* 6. Boot.  MainlineBootBoot() prints its own final [BOOTAPP] lines and
-   *    does not return on success (ExitBootServices + jump to the kernel). */
-  Print (L"[BOOTAPP] all payloads staged - booting\r\n");
+  /* 6. Boot.  Silent on success: MainlineBootBoot() does not return
+   *    (ExitBootServices + jump to the kernel); a failure lands in
+   *    BootAppFail() and is printed. */
   Status = MainlineBootBoot ();
   return BootAppFail (L"MainlineBootBoot", Status);
 }
