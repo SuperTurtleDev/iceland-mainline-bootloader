@@ -24,128 +24,6 @@
  * MlbReadCells / MlbWriteCells) so the host unit test runs the same code. */
 
 /* ------------------------------------------------------------------------ */
-/* /memory                                                                   */
-/* ------------------------------------------------------------------------ */
-
-STATIC EFI_STATUS
-MlbUpdateMemoryNode (
-  IN VOID  *Fdt
-  )
-{
-  EFI_STATUS       Status;
-  INT32            MemOff, Ret;
-  UINT32           AddrCells, SizeCells, i, Entry, N;
-  MLB_MEM_REGION   Parts[MLB_MAX_MEM_REGIONS];
-  MLB_MEM_REGION   Final[MLB_MAX_MEM_REGIONS];
-  UINT32           NumFinal;
-  UINT32          *Buf;
-
-  /* "/memory" also matches "memory@a0000000" (libfdt ignores unit address) */
-  MemOff = fdt_path_offset (Fdt, "/memory");
-  if (MemOff < 0) {
-    DEBUG ((EFI_D_WARN, "MainlineBoot: no /memory node, creating one\n"));
-    MemOff = fdt_add_subnode (Fdt, 0, "memory");
-    if (MemOff < 0) {
-      DEBUG ((EFI_D_ERROR, "MainlineBoot: fdt_add_subnode(memory): %a\n",
-              fdt_strerror (MemOff)));
-      return EFI_DEVICE_ERROR;
-    }
-    Ret = fdt_setprop_string (Fdt, MemOff, "device_type", "memory");
-    if (Ret < 0) {
-      return EFI_DEVICE_ERROR;
-    }
-  }
-
-  /* cells: root #address-cells/#size-cells, default 2/2 (QueryMemoryCellSize) */
-  MlbFdtGetCells (Fdt, 0, MLB_DEFAULT_CELLS, MLB_DEFAULT_CELLS, &AddrCells, &SizeCells);
-  if (AddrCells == 0 || AddrCells > 2 || SizeCells == 0 || SizeCells > 2) {
-    DEBUG ((EFI_D_ERROR, "MainlineBoot: unsupported root cells %u/%u\n",
-            AddrCells, SizeCells));
-    return EFI_UNSUPPORTED;
-  }
-  DEBUG ((EFI_D_INFO, "MainlineBoot: root #address-cells=%u #size-cells=%u\n",
-          AddrCells, SizeCells));
-
-  if (gMlb.NumRamPartitions == 0 || gMlb.NumRamPartitions > MLB_MAX_MEM_REGIONS) {
-    return EFI_UNSUPPORTED;
-  }
-  for (i = 0; i < gMlb.NumRamPartitions; i++) {
-    Parts[i].Base = gMlb.RamPartitions[i].Base;
-    Parts[i].Size = gMlb.RamPartitions[i].AvailableLength;
-  }
-
-#ifdef MAINLINE_REMOVE_CARVEOUT
-  {
-    MLB_MEM_REGION  NoMap[MLB_MAX_MEM_REGIONS];
-    UINT32          NumNoMap = 0;
-
-    Status = MlbFdtGetNoMapRegions (Fdt, NoMap, MLB_MAX_MEM_REGIONS, &NumNoMap);
-    if (Status == EFI_NOT_FOUND) {
-      DEBUG ((EFI_D_INFO, "MainlineBoot: no /reserved-memory node\n"));
-    } else if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "MainlineBoot: reading no-map regions failed: %r\n",
-              Status));
-      return Status;
-    }
-    DEBUG ((EFI_D_INFO, "MainlineBoot: %u raw no-map region(s) in DT\n", NumNoMap));
-    NumNoMap = MlbSortAndCombineRegions (NoMap, NumNoMap);
-    DEBUG ((EFI_D_INFO, "MainlineBoot: %u merged no-map carveout(s):\n", NumNoMap));
-    for (i = 0; i < NumNoMap; i++) {
-      DEBUG ((EFI_D_INFO, "  carveout 0x%016lx - 0x%016lx\n", NoMap[i].Base,
-              NoMap[i].Base + NoMap[i].Size));
-    }
-    Status = MlbRemoveRegions (Parts, gMlb.NumRamPartitions, NoMap, NumNoMap,
-                               Final, MLB_MAX_MEM_REGIONS, &NumFinal);
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "MainlineBoot: carveout removal failed: %r\n", Status));
-      return Status;
-    }
-  }
-#else
-  CopyMem (Final, Parts, gMlb.NumRamPartitions * sizeof (MLB_MEM_REGION));
-  NumFinal = gMlb.NumRamPartitions;
-#endif
-
-  if (NumFinal == 0) {
-    DEBUG ((EFI_D_ERROR, "MainlineBoot: no usable RAM left after carveouts\n"));
-    return EFI_NOT_FOUND;
-  }
-
-  /* Build the whole "reg" property in one go: equivalent to ABL's
-   * fdt_setprop_u64 for the first + fdt_appendprop_u64 for the rest. */
-  Entry = (AddrCells + SizeCells) * sizeof (UINT32);
-  Buf = AllocateZeroPool (NumFinal * Entry);
-  if (Buf == NULL) {
-    return EFI_OUT_OF_RESOURCES;
-  }
-  DEBUG ((EFI_D_INFO, "MainlineBoot: Final RAM partitions (%u):\n", NumFinal));
-  N = 0;
-  for (i = 0; i < NumFinal; i++) {
-    DEBUG ((EFI_D_INFO, "  Add Base: 0x%016lx Available Length: 0x%016lx\n",
-            Final[i].Base, Final[i].Size));
-    if ((AddrCells == 1 && Final[i].Base >= 0x100000000ULL) ||
-        (SizeCells == 1 && Final[i].Size >= 0x100000000ULL)) {
-      DEBUG ((EFI_D_ERROR, "MainlineBoot: region does not fit in 32-bit cells\n"));
-      FreePool (Buf);
-      return EFI_UNSUPPORTED;
-    }
-    MlbWriteCells (Buf + N, AddrCells, Final[i].Base);
-    N += AddrCells;
-    MlbWriteCells (Buf + N, SizeCells, Final[i].Size);
-    N += SizeCells;
-  }
-
-  Ret = fdt_setprop (Fdt, MemOff, "reg", Buf, NumFinal * Entry);
-  FreePool (Buf);
-  if (Ret < 0) {
-    DEBUG ((EFI_D_ERROR, "MainlineBoot: fdt_setprop(memory/reg): %a\n",
-            fdt_strerror (Ret)));
-    return EFI_DEVICE_ERROR;
-  }
-  return EFI_SUCCESS;
-}
-
-/* ------------------------------------------------------------------------ */
 /* simple-framebuffer (UEFI GOP handoff) — DISABLED                          */
 /* msm DRM initializes the panel from scratch; the GOP handoff causes panel */
 /* abnormal states during kernel transition. Re-enable if needed for debug.  */
@@ -265,9 +143,7 @@ MlbAddSimpleFramebuffer (
           Info->HorizontalResolution, Info->VerticalResolution, Stride, Fmt,
           FbBase, FbSize));
 
-  /* /reserved-memory: no-map carve-out (also subtracted from /memory when
-   * MAINLINE_REMOVE_CARVEOUT is enabled, since this runs before
-   * MlbUpdateMemoryNode). */
+  /* /reserved-memory: no-map carve-out for the (disabled) simplefb node. */
   Rm = fdt_path_offset (Fdt, "/reserved-memory");
   if (Rm < 0) {
     Rm = fdt_add_subnode (Fdt, 0, "reserved-memory");
@@ -524,13 +400,7 @@ MlbUpdateDeviceTree (
    *     (white flash → black → recovery) during the kernel transition. */
   /* MlbAddSimpleFramebuffer (Fdt); */
 
-  /* 2. /memory */
-  Status = MlbUpdateMemoryNode (Fdt);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  /* 3. /chosen */
+  /* 2. /chosen */
   Status = MlbUpdateChosen (Fdt, CmdLine, InitrdAddr, InitrdSize);
   if (EFI_ERROR (Status)) {
     return Status;
