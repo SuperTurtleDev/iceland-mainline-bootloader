@@ -25,6 +25,12 @@
 #include <Protocol/EFIUsbDevice.h>
 #include <Protocol/EFIChipInfo.h>
 #include <Library/MainlineBootLib.h>
+#include <Guid/MemoryAttributesTable.h>
+#include <Guid/Fdt.h>
+#include <Guid/DxeServices.h>
+#include <Guid/HobList.h>
+#include <Guid/MemoryTypeInformation.h>
+#include <Guid/DebugImageInfoTable.h>
 #include <Protocol/GraphicsOutput.h>
 
 #include "TestBootFastboot.h"
@@ -48,6 +54,7 @@
 #define MAX_FASTBOOT_COMMAND_SIZE   64
 #define ASCII_HEX_STRING_MAX_LENGTH 8
 #define MAX_XFER_CHUNK              (16 * 1024 * 1024)
+#define MAX_FETCH_CHUNK             (1 * 1024 * 1024)   /* fetch: upload chunk  */
 #define MIN_DOWNLOAD_BUFFER_SIZE    (64ULL * 1024 * 1024)
 #define MAX_DOWNLOAD_BUFFER_SIZE    (1024ULL * 1024 * 1024)
 #define FIRST_RX_SIZE               511          /* as ABL HandleUsbEvents() */
@@ -90,6 +97,22 @@ STATIC BOOLEAN         mContinue;
 STATIC BOOLEAN         mUsbStarted;
 STATIC CHAR8           mSerial[MAX_RSP_SIZE];
 STATIC CHAR8           mMaxDownloadStr[MAX_RSP_SIZE];
+
+/* memory map dump blobs (virtual partitions, defined further down) */
+STATIC
+EFI_STATUS
+MlbGetDumpBlob (
+  IN  CONST CHAR8  *Name,
+  OUT CHAR8       **Blob,
+  OUT UINTN        *Size
+  );
+
+STATIC VOID MlbFreeDumpBlobs (VOID);
+
+/* fetch handlers (defined near the other dump code, after the command
+ * table that references them) */
+STATIC VOID CmdFetch (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size);
+STATIC VOID CmdOemMemmapRefresh (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size);
 
 /* ------------------------------------------------------------------------ */
 /* responses                                                                 */
@@ -276,8 +299,10 @@ GetVarValue (
   IN  UINTN         ValueMax
   )
 {
+  CHAR8  *DumpBlob;
+  UINTN   DumpSize;
   if (AsciiStrCmp (Name, "version") == 0) {
-    AsciiStrCpyS (Value, ValueMax, "0.4");
+    AsciiStrCpyS (Value, ValueMax, "0.5");
   } else if (AsciiStrCmp (Name, "version-bootloader") == 0) {
     AsciiStrCpyS (Value, ValueMax, "mainlineboot-0.1");
   } else if (AsciiStrCmp (Name, "product") == 0) {
@@ -312,6 +337,12 @@ GetVarValue (
     AsciiStrCpyS (Value, ValueMax, "no");
   } else if (AsciiStrnCmp (Name, "partition-type:", 15) == 0) {
     AsciiStrCpyS (Value, ValueMax, "raw");
+  } else if (AsciiStrnCmp (Name, "partition-size:", 15) == 0 &&
+             MlbGetDumpBlob (Name + 15, &DumpBlob, &DumpSize) == EFI_SUCCESS) {
+    /* dump virtual partitions report their real text size */
+    AsciiSPrint (Value, ValueMax, "0x%lx", (UINT64)DumpSize);
+  } else if (AsciiStrCmp (Name, "max-fetch-size") == 0) {
+    AsciiSPrint (Value, ValueMax, "0x%lx", (UINT64)MAX_FETCH_CHUNK);
   } else if (AsciiStrnCmp (Name, "partition-size:", 15) == 0) {
     AsciiStrCpyS (Value, ValueMax, "0x40000000");
   } else {
@@ -349,6 +380,7 @@ CmdGetVarAll (
     "version", "version-bootloader", "product", "serialno", "max-download-size",
     "window", "is-userspace", "kernel", "secure", "unlocked", "slot-count",
     "has-slot:kernel", "partition-type:kernel", "partition-size:kernel",
+    "max-fetch-size", "partition-size:memmap", "partition-size:tzmap", "partition-size:cfgtbl",
   };
   CHAR8  Line[MAX_RSP_SIZE];
   CHAR8  Value[MAX_RSP_SIZE];
@@ -419,6 +451,8 @@ CmdFlash (
 
   DEBUG ((EFI_D_INFO, "fastboot: flash:%a (%lu bytes, RAM only)\n", Arg,
           (UINT64)Len));
+
+  MlbFreeDumpBlobs ();        /* allocations changed the memory map */
 
   if (AsciiStrCmp (Arg, "bootcfg") == 0) {
     Status = MainlineBootLoadBootcfg (Data, Len);
@@ -570,6 +604,13 @@ CmdOemHelp (
     " fastboot continue                      (boot)",
     " fastboot oem gop                       (GOP info)",
     " fastboot oem fbfill:RRGGBB             (fill screen)",
+    " fastboot fetch memmap memmap.txt       (UEFI memory map dump)",
+    " fastboot fetch tzmap tzmap.txt         (TZ RAM partitions)",
+    " fastboot fetch cfgtbl cfgtbl.txt        (config tables + MAT)",
+    " fastboot oem memmap-refresh            (recapture dumps)",
+    " fastboot fetch memmap memmap.txt       (UEFI memory map dump)",
+    " fastboot fetch tzmap tzmap.txt         (TZ RAM partitions)",
+    " fastboot oem memmap-refresh            (recapture dumps)",
     " nothing is written to storage",
   };
   UINTN  i;
@@ -744,6 +785,8 @@ STATIC CONST FASTBOOT_CMD mCmdList[] = {
   { "oem status",        CmdOemStatus },
   { "oem gop",           CmdOemGop },
   { "oem fbfill:",       CmdOemFbFill },
+  { "fetch:",            CmdFetch },
+  { "oem memmap-refresh", CmdOemMemmapRefresh },
 };
 
 /* FastbootCmds.c AcceptCmd() */
@@ -775,6 +818,459 @@ AcceptCmd (
     return;
   }
   FastbootFail ("unknown command");
+}
+
+
+/* ------------------------------------------------------------------------ */
+/* memory map dumps: virtual partitions for "fastboot fetch"                */
+/*                                                                          */
+/* The kernel's EFI boot consumes the UEFI memory map (linux,uefi-mmap-*), */
+/* NOT the DT /memory we patch. These dumps capture both sides - the       */
+/* firmware GetMemoryMap() view and the TZ RAM partitions - so they can be */
+/* diffed on the host for regions the firmware calls usable but TZ does    */
+/* not vouch for.                                                          */
+/* ------------------------------------------------------------------------ */
+
+#define MEMMAP_BLOB_CHUNK   (32 * 1024)
+
+STATIC CHAR8  *mMmapBlob;
+STATIC UINTN   mMmapBlobSize;
+STATIC CHAR8  *mTzBlob;
+STATIC UINTN   mTzBlobSize;
+STATIC CHAR8  *mCfgBlob;
+STATIC UINTN   mCfgBlobSize;
+
+STATIC VOID
+MlbFreeDumpBlobs (
+  VOID
+  )
+{
+  if (mMmapBlob != NULL) {
+    FreePool (mMmapBlob);
+  }
+  mMmapBlob = NULL;
+  mMmapBlobSize = 0;
+  if (mTzBlob != NULL) {
+    FreePool (mTzBlob);
+  }
+  mTzBlob = NULL;
+  mTzBlobSize = 0;
+  if (mCfgBlob != NULL) {
+    FreePool (mCfgBlob);
+  }
+  mCfgBlob = NULL;
+  mCfgBlobSize = 0;
+}
+
+/* append helper, returns FALSE when out of space */
+STATIC BOOLEAN
+MlbAppendLine (
+  IN OUT CHAR8       **Pos,
+  IN OUT UINTN        *Left,
+  IN     CONST CHAR8  *Line
+  )
+{
+  UINTN  Len = AsciiStrLen (Line);
+
+  if (Len >= *Left) {
+    return FALSE;
+  }
+  CopyMem (*Pos, Line, Len + 1);             /* keep the NUL for strlen */
+  *Pos += Len;
+  *Left -= Len;
+  return TRUE;
+}
+
+STATIC CONST CHAR8 *
+MlbMemTypeName (
+  IN UINT32  Type
+  )
+{
+  switch (Type) {
+  case 0x00: return "RESERVED";
+  case 0x01: return "LOADER_CODE";
+  case 0x02: return "LOADER_DATA";
+  case 0x03: return "BOOT_SERVICES_CODE";
+  case 0x04: return "BOOT_SERVICES_DATA";
+  case 0x05: return "RUNTIME_SERVICES_CODE";
+  case 0x06: return "RUNTIME_SERVICES_DATA";
+  case 0x07: return "CONVENTIONAL";
+  case 0x08: return "UNUSABLE";
+  case 0x09: return "ACPI_RECLAIM";
+  case 0x0A: return "ACPI_NVS";
+  case 0x0B: return "MMIO";
+  case 0x0C: return "MMIO_PORT";
+  case 0x0D: return "PAL_CODE";
+  case 0x0E: return "PERSISTENT";
+  default:   return "UNKNOWN";
+  }
+}
+
+STATIC EFI_STATUS
+MlbBuildMemmapBlob (
+  VOID
+  )
+{
+  EFI_STATUS              Status;
+  UINTN                   MapSize = 0;
+  UINTN                   MapKey = 0;
+  UINTN                   DescSize = 0;
+  UINT32                  DescVer = 0;
+  EFI_MEMORY_DESCRIPTOR  *Map = NULL;
+  UINTN                   Entries, i;
+  CHAR8                  *Pos;
+  UINTN                   Left;
+  CHAR8                   Line[160];
+
+  Status = gBS->GetMemoryMap (&MapSize, NULL, &MapKey, &DescSize, &DescVer);
+  if (Status != EFI_BUFFER_TOO_SMALL) {
+    return Status == EFI_SUCCESS ? EFI_DEVICE_ERROR : Status;
+  }
+  MapSize += 2 * DescSize;                   /* slack against later growth */
+  Map = AllocatePool (MapSize);
+  if (Map == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  Status = gBS->GetMemoryMap (&MapSize, Map, &MapKey, &DescSize, &DescVer);
+  if (EFI_ERROR (Status)) {
+    FreePool (Map);
+    return Status;
+  }
+
+  Entries = MapSize / DescSize;
+  if (mMmapBlob == NULL) {
+    mMmapBlob = AllocatePool (MEMMAP_BLOB_CHUNK);
+    if (mMmapBlob == NULL) {
+      FreePool (Map);
+      return EFI_OUT_OF_RESOURCES;
+    }
+  }
+  Pos = mMmapBlob;
+  Left = MEMMAP_BLOB_CHUNK - 1;
+
+  AsciiSPrint (Line, sizeof (Line),
+               "# uefi-memmap v1 entries=%lu descsize=%lu descver=%u mapkey=0x%lx\n",
+               (UINT64)Entries, (UINT64)DescSize, DescVer, (UINT64)MapKey);
+  MlbAppendLine (&Pos, &Left, Line);
+  AsciiSPrint (Line, sizeof (Line),
+               "# idx type                 hex attr                start-end                             pages\n");
+  MlbAppendLine (&Pos, &Left, Line);
+
+  for (i = 0; i < Entries; i++) {
+    EFI_MEMORY_DESCRIPTOR  *D;
+    UINT64  Start, End;
+
+    D = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Map + i * DescSize);
+    Start = D->PhysicalStart;
+    End = Start + (UINT64)D->NumberOfPages * SIZE_4KB - 1;
+    AsciiSPrint (Line, sizeof (Line),
+                 "%04lu %-19a %02x 0x%016lx %016lx-%016lx 0x%lx\n",
+                 (UINT64)i, MlbMemTypeName (D->Type), D->Type, D->Attribute,
+                 Start, End, (UINT64)D->NumberOfPages);
+    if (!MlbAppendLine (&Pos, &Left, Line)) {
+      DEBUG ((EFI_D_WARN, "fastboot: memmap dump truncated at %lu entries\n",
+              (UINT64)i));
+      break;
+    }
+  }
+  mMmapBlobSize = (UINTN)(Pos - mMmapBlob);
+  FreePool (Map);
+  return EFI_SUCCESS;
+}
+
+STATIC EFI_STATUS
+MlbBuildTzBlob (
+  VOID
+  )
+{
+  MAINLINE_BOOT_INFO  Info;
+  CHAR8              *Pos;
+  UINTN               Left;
+  CHAR8               Line[160];
+  UINTN               i;
+
+  if (mTzBlob == NULL) {
+    mTzBlob = AllocatePool (MEMMAP_BLOB_CHUNK);
+    if (mTzBlob == NULL) {
+      return EFI_OUT_OF_RESOURCES;
+    }
+  }
+  Pos = mTzBlob;
+  Left = MEMMAP_BLOB_CHUNK - 1;
+
+  if (EFI_ERROR (MainlineBootGetInfo (&Info)) || !Info.Initialized) {
+    MlbAppendLine (&Pos, &Left, "# tz-rampartitions: MainlineBootInit failed\n");
+    mTzBlobSize = (UINTN)(Pos - mTzBlob);
+    return EFI_SUCCESS;
+  }
+
+  AsciiSPrint (Line, sizeof (Line), "# tz-rampartitions v1 entries=%lu\n",
+               (UINT64)Info.NumRamPartitions);
+  MlbAppendLine (&Pos, &Left, Line);
+  AsciiSPrint (Line, sizeof (Line),
+               "# idx start-end                             available\n");
+  MlbAppendLine (&Pos, &Left, Line);
+
+  for (i = 0; i < Info.NumRamPartitions; i++) {
+    UINT64  B = Info.RamPartitions[i].Base;
+    UINT64  L = Info.RamPartitions[i].Length;
+
+    AsciiSPrint (Line, sizeof (Line), "%04lu %016lx-%016lx 0x%lx\n",
+                 (UINT64)i, B, B + L - 1, L);
+    if (!MlbAppendLine (&Pos, &Left, Line)) {
+      break;
+    }
+  }
+  mTzBlobSize = (UINTN)(Pos - mTzBlob);
+  return EFI_SUCCESS;
+}
+
+
+/* configuration table + Memory Attributes Table dump ("cfgtbl").
+ * The arm64 kernel parses the MAT very early (efi_memattr_init, before
+ * any console) and a malformed table is a silent no-boot candidate. */
+STATIC CONST CHAR8 *
+MlbCfgtblName (
+  IN CONST EFI_GUID  *Guid
+  )
+{
+  if (CompareGuid (Guid, &gEfiMemoryAttributesTableGuid)) return "MEMORY_ATTRIBUTES_TABLE";
+  if (CompareGuid (Guid, &gFdtTableGuid))                 return "DEVICE_TREE";
+  if (CompareGuid (Guid, &gEfiDxeServicesTableGuid))      return "DXE_SERVICES";
+  if (CompareGuid (Guid, &gEfiHobListGuid))               return "HOB_LIST";
+  if (CompareGuid (Guid, &gEfiMemoryTypeInformationGuid)) return "MEMORY_TYPE_INFO";
+  if (CompareGuid (Guid, &gEfiDebugImageInfoTableGuid))   return "DEBUG_IMAGE_INFO";
+  return "";
+}
+
+STATIC VOID
+MlbDumpMat (
+  IN OUT CHAR8  **Pos,
+  IN OUT UINTN   *Left,
+  IN     VOID    *VendorTable
+  )
+{
+  EFI_MEMORY_ATTRIBUTES_TABLE  *Mat = VendorTable;
+  CHAR8                         Line[160];
+  UINT32                        i;
+
+  if (Mat == NULL) {
+    return;
+  }
+  if ((UINTN)Mat == MAX_ADDRESS) {
+    MlbAppendLine (Pos, Left, "  mat: PLACEHOLDER (MAX_ADDRESS, not built)\n");
+    return;
+  }
+  AsciiSPrint (Line, sizeof (Line),
+               "  mat: version=%u entries=%u descsize=%u\n",
+               Mat->Version, Mat->NumberOfEntries, Mat->DescriptorSize);
+  MlbAppendLine (Pos, Left, Line);
+  if (Mat->DescriptorSize < sizeof (EFI_MEMORY_DESCRIPTOR) ||
+      Mat->NumberOfEntries == 0 || Mat->NumberOfEntries > 4096) {
+    MlbAppendLine (Pos, Left, "  mat: BAD header bounds\n");
+    return;
+  }
+  for (i = 0; i < Mat->NumberOfEntries; i++) {
+    EFI_MEMORY_DESCRIPTOR  *D = (EFI_MEMORY_DESCRIPTOR *)
+      ((UINT8 *)(Mat + 1) + i * Mat->DescriptorSize);
+    UINT64  Start = D->PhysicalStart;
+    UINT64  End = Start + (UINT64)D->NumberOfPages * SIZE_4KB - 1;
+
+    AsciiSPrint (Line, sizeof (Line),
+                 "  mat %03u %-19a %016lx-%016lx attr=0x%lx pages=0x%lx\n",
+                 i, MlbMemTypeName (D->Type), Start, End, D->Attribute,
+                 (UINT64)D->NumberOfPages);
+    if (!MlbAppendLine (Pos, Left, Line)) {
+      MlbAppendLine (Pos, Left, "  mat: dump truncated\n");
+      return;
+    }
+  }
+}
+
+STATIC EFI_STATUS
+MlbBuildCfgtblBlob (
+  VOID
+  )
+{
+  CHAR8  Line[160];
+  CHAR8 *Pos;
+  UINTN  Left;
+  UINTN  i;
+
+  if (mCfgBlob == NULL) {
+    mCfgBlob = AllocatePool (MEMMAP_BLOB_CHUNK);
+    if (mCfgBlob == NULL) {
+      return EFI_OUT_OF_RESOURCES;
+    }
+  }
+  Pos = mCfgBlob;
+  Left = MEMMAP_BLOB_CHUNK - 1;
+
+  AsciiSPrint (Line, sizeof (Line), "# uefi-cfgtbl v1 entries=%lu\n",
+               (UINT64)gST->NumberOfTableEntries);
+  MlbAppendLine (&Pos, &Left, Line);
+  AsciiSPrint (Line, sizeof (Line),
+               "# idx guid                                   vendorptr name\n");
+  MlbAppendLine (&Pos, &Left, Line);
+
+  for (i = 0; i < gST->NumberOfTableEntries; i++) {
+    EFI_CONFIGURATION_TABLE  *T = &gST->ConfigurationTable[i];
+    CONST EFI_GUID           *G = &T->VendorGuid;
+
+    AsciiSPrint (Line, sizeof (Line),
+                 "%04lu %08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x %016lx %a\n",
+                 (UINT64)i, G->Data1, G->Data2, G->Data3,
+                 G->Data4[0], G->Data4[1], G->Data4[2], G->Data4[3],
+                 G->Data4[4], G->Data4[5], G->Data4[6], G->Data4[7],
+                 (UINT64)(UINTN)T->VendorTable, MlbCfgtblName (G));
+    if (!MlbAppendLine (&Pos, &Left, Line)) {
+      break;
+    }
+    if (CompareGuid (G, &gEfiMemoryAttributesTableGuid)) {
+      MlbDumpMat (&Pos, &Left, T->VendorTable);
+    }
+  }
+  mCfgBlobSize = (UINTN)(Pos - mCfgBlob);
+  return EFI_SUCCESS;
+}
+
+/* virtual partition lookup; builds and caches on first use */
+STATIC EFI_STATUS
+MlbGetDumpBlob (
+  IN  CONST CHAR8  *Name,
+  OUT CHAR8       **Blob,
+  OUT UINTN        *Size
+  )
+{
+  EFI_STATUS  Status;
+
+  if (AsciiStrCmp (Name, "memmap") == 0) {
+    if (mMmapBlob == NULL) {
+      Status = MlbBuildMemmapBlob ();
+      if (EFI_ERROR (Status)) {
+        return Status;
+      }
+    }
+    *Blob = mMmapBlob;
+    *Size = mMmapBlobSize;
+    return EFI_SUCCESS;
+  }
+  if (AsciiStrCmp (Name, "tzmap") == 0) {
+    if (mTzBlob == NULL) {
+      Status = MlbBuildTzBlob ();
+      if (EFI_ERROR (Status)) {
+        return Status;
+      }
+    }
+    *Blob = mTzBlob;
+    *Size = mTzBlobSize;
+    return EFI_SUCCESS;
+  }
+  if (AsciiStrCmp (Name, "cfgtbl") == 0) {
+    if (mCfgBlob == NULL) {
+      Status = MlbBuildCfgtblBlob ();
+      if (EFI_ERROR (Status)) {
+        return Status;
+      }
+    }
+    *Blob = mCfgBlob;
+    *Size = mCfgBlobSize;
+    return EFI_SUCCESS;
+  }
+  return EFI_NOT_FOUND;
+}
+
+/* "fetch:<offset>,<size>,<partition>" (fastboot >= 30): upload one chunk
+ * of a dump blob - DATA response, raw payload, then OKAY, exactly like
+ * ABL's upload direction. Chunks are capped by max-fetch-size. */
+STATIC VOID
+CmdFetch (
+  IN CONST CHAR8  *Arg,
+  IN VOID         *Data,
+  IN UINT32        Size
+  )
+{
+  CHAR8      Req[64];
+  CHAR8     *P1, *P2;
+  CONST CHAR8 *Name;
+  UINT64     Offset, Want;
+  CHAR8     *Blob;
+  UINTN      BlobSize;
+  EFI_STATUS Status;
+  UINTN      Len;
+
+  Len = AsciiStrLen (Arg);
+  if (Len == 0 || Len >= sizeof (Req)) {
+    FastbootFail ("fetch: bad request");
+    return;
+  }
+  AsciiStrCpyS (Req, sizeof (Req), Arg);
+  /* fastboot >= 30 sends "fetch:<part>:0x<offset>:0x<size>"; the older
+   * comma form was "fetch:<offset>,<size>,<part>" - accept both */
+  if (AsciiStrStr (Req, ",") != NULL) {
+    P1 = AsciiStrStr (Req, ",");
+    *P1++ = '\0';
+    P2 = AsciiStrStr (P1, ",");
+    if (P2 == NULL) {
+      FastbootFail ("fetch: parse error");
+      return;
+    }
+    *P2++ = '\0';
+    Offset = AsciiStrHexToUint64 (Req);
+    Want = AsciiStrHexToUint64 (P1);
+    Name = Req;
+  } else {
+    P1 = AsciiStrStr (Req, ":");
+    if (P1 == NULL) {
+      FastbootFail ("fetch: parse error");
+      return;
+    }
+    *P1++ = '\0';
+    P2 = AsciiStrStr (P1, ":");
+    if (P2 == NULL) {
+      FastbootFail ("fetch: parse error");
+      return;
+    }
+    *P2++ = '\0';
+    Name = Req;
+    Offset = AsciiStrHexToUint64 (P1);
+    Want = AsciiStrHexToUint64 (P2);
+  }
+  if (Want == 0 || Want > MAX_FETCH_CHUNK) {
+    FastbootFail ("fetch: bad size");
+    return;
+  }
+
+  Status = MlbGetDumpBlob (Name, &Blob, &BlobSize);
+  if (EFI_ERROR (Status)) {
+    FastbootFail ("no such partition (memmap/tzmap)");
+    return;
+  }
+  if (Offset > BlobSize || Want > BlobSize - Offset) {
+    FastbootFail ("out of range (stale size, retry getvar)");
+    return;
+  }
+
+  AsciiSPrint ((CHAR8 *)mTxBuffer, MAX_RSP_SIZE, "DATA%08x", (UINT32)Want);
+  mUsb->Send (ENDPOINT_OUT, AsciiStrLen (mTxBuffer), mTxBuffer);
+  WaitForTransferComplete ();
+  mUsb->Send (ENDPOINT_OUT, (UINT32)Want, (VOID *)(Blob + Offset));
+  WaitForTransferComplete ();
+  /* the closing OKAY must go out unwaited: its TX completion is what the
+   * outer event loop uses to queue the next command receive */
+  FastbootOkay ("");
+}
+
+/* drop the cached dumps so the next fetch re-captures the live maps */
+STATIC VOID
+CmdOemMemmapRefresh (
+  IN CONST CHAR8  *Arg,
+  IN VOID         *Data,
+  IN UINT32        Size
+  )
+{
+  MlbFreeDumpBlobs ();
+  FastbootOkay ("");
 }
 
 /* FastbootCmds.c AcceptData() */
@@ -1068,6 +1564,7 @@ FastbootStop (
   if (mUsb == NULL) {
     return EFI_NOT_STARTED;
   }
+  MlbFreeDumpBlobs ();
   if (mTxBuffer != NULL) {
     mUsb->FreeTransferBuffer (mTxBuffer);
     mTxBuffer = NULL;

@@ -17,6 +17,7 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/EFIRamPartition.h>
+#include <Protocol/GraphicsOutput.h>
 
 #include <Library/MainlineBootLib.h>
 #include "MainlineBootCore.h"
@@ -70,20 +71,35 @@ MlbUpdateDeviceTree (
   );
 
 /* MainlineBootJump.c */
+EFI_GRAPHICS_OUTPUT_PROTOCOL *
+MlbLocateGop (
+  VOID
+  );
+
 EFI_STATUS
-MlbShutdownUefiBootServices (
+MlbDetachGop (
   VOID
   );
 
-VOID
-MlbPreparePlatformHardware (
+EFI_STATUS
+MlbInstallInitrdMedia (
   VOID
   );
 
-VOID
-MlbJumpToKernel (
-  IN UINT64  KernelEntry,
-  IN UINT64  DtbAddr
+EFI_STATUS
+MlbInstallFdtConfigTable (
+  IN VOID  *Fdt
+  );
+
+BOOLEAN
+MlbKernelHasEfiStub (
+  IN CONST VOID  *Kernel,
+  IN UINTN        Size
+  );
+
+EFI_STATUS
+MlbBootKernelEfiStub (
+  IN CONST CHAR8  *CmdLine OPTIONAL
   );
 
 #endif /* __MAINLINE_BOOT_INTERNAL_H__ */

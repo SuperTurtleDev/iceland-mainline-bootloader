@@ -45,8 +45,12 @@
 [Guids]
   gQcomTokenSpaceGuid           ## CONSUMES  (L"KernelBaseAddr" / L"KernelSize" variables)
   gEfiRNGAlgRawGuid             ## CONSUMES  (EFI_RNG_ALGORITHM_RAW, QcomModulePkg.dec)
+  gFdtTableGuid                 ## PRODUCES  (EFI configuration table DTB entry for the kernel EFI stub)
 
 [Protocols]
   gEfiRamPartitionProtocolGuid  ## CONSUMES
   gEfiGraphicsOutputProtocolGuid ## SOMETIMES_CONSUMES (GOP -> simple-framebuffer handoff)
   gQcomRngProtocolGuid          ## SOMETIMES_CONSUMES (same GUID value as MdePkg gEfiRngProtocolGuid)
+  gEfiLoadedImageProtocolGuid   ## SOMETIMES_CONSUMES (kernel image: LoadOptions)
+  gEfiLoadFile2ProtocolGuid     ## SOMETIMES_PRODUCES (initrd -> kernel EFI stub)
+  gEfiDevicePathProtocolGuid    ## SOMETIMES_PRODUCES (initrd LINUX_EFI_INITRD_MEDIA_GUID device path)

@@ -6,8 +6,7 @@
     - /reserved-memory no-map carveout removal from RAM partitions
     - bootcfg "cmdline=" parsing
 
-  The file compiles both inside EDK2 and on a host with -DMLB_HOST_TEST
-  (see MainlineBootPkg/Test/).
+  The file compiles both inside EDK2 and on a host with -DMLB_HOST_TEST.
 
   SPDX-License-Identifier: BSD-3-Clause-Clear
 **/

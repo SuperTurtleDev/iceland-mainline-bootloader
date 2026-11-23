@@ -1,0 +1,44 @@
+## @file QemuBoot.inf
+#
+#  QEMU virt test front-end for the MainlineBoot EFISTUB handoff: fake
+#  RamPartition protocol + payload files from the boot FAT volume +
+#  the public MainlineBootLib flow. Deploy as \EFI\BOOT\BOOTAA64.EFI.
+#
+#  SPDX-License-Identifier: BSD-3-Clause-Clear
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = QemuBoot
+  FILE_GUID                      = 5C3A6F8E-2D41-4B77-9A05-1E6C4D08B7F2
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = QemuBootMain
+
+[Sources]
+  QemuBoot.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  MainlineBootLib
+
+[Protocols]
+  gEfiRamPartitionProtocolGuid      ## PRODUCES (fake QEMU virt RAM map)
+  gEfiSimpleFileSystemProtocolGuid  ## CONSUMES (payload files)
+  gEfiLoadedImageProtocolGuid       ## CONSUMES (boot volume handle)
+
+[Guids]
+  gEfiFileInfoGuid                  ## CONSUMES (file size query)
+  gFdtTableGuid                      ## SOMETIMES_CONSUMES (firmware FDT fallback)

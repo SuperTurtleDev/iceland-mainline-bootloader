@@ -88,3 +88,4 @@
   MainlineBootPkg/Application/TestBootApp/TestBootApp.inf
 MainlineBootPkg/Application/BootApp/BootApp.inf
 MainlineBootPkg/Application/BootUtil/BootUtil.inf
+MainlineBootPkg/Application/QemuBoot/QemuBoot.inf

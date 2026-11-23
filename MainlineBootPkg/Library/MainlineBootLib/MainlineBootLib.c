@@ -12,9 +12,7 @@
 **/
 
 #include "MainlineBootInternal.h"
-#include <Library/UefiLib.h>
 #include <libfdt.h>
-#include <Protocol/GraphicsOutput.h>
 
 MLB_STATE  gMlb;
 
@@ -506,7 +504,6 @@ MainlineBootLoadBootcfg (
   gMlb.KernelParamsFromCfg = FALSE;
 
   CmdLine = AllocateZeroPool (MLB_MAX_CMDLINE_LEN);
-  CmdLine = AllocateZeroPool (MLB_MAX_CMDLINE_LEN);
   if (CmdLine == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
@@ -632,78 +629,14 @@ MainlineBootGetLayout (
 /* MainlineBootBoot                                                          */
 /* ------------------------------------------------------------------------ */
 
-/**
-  Sanity check of the kernel window [KernelBaseAddr, KernelEndAddr) before
-  anything is copied into it. ABL does not do this (it trusts the UEFI
-  variables), but it protects against the ABL fallback (BaseMemory +
-  0x05600000) on SoCs where the bottom of DDR is hypervisor / TZ memory:
-  writing there faults or is silently blocked by stage-2.
-
-    - not inside any TZ RAM partition          -> error (always)
-    - overlaps a /reserved-memory no-map region -> error when the window came
-                                                  from the fallback, warning
-                                                  when it came from UEFI vars
-**/
-STATIC EFI_STATUS
-MlbCheckKernelWindow (
-  IN CONST MLB_LAYOUT_OUT  *L
-  )
-{
-  MLB_MEM_REGION  Parts[MLB_MAX_MEM_REGIONS];
-  MLB_MEM_REGION  NoMap[MLB_MAX_MEM_REGIONS];
-  MLB_MEM_REGION  Hit;
-  UINT32          i, NumNoMap = 0;
-  UINT64          Base = gMlb.KernelBaseAddr;
-  UINT64          Size = L->KernelEndAddr - gMlb.KernelBaseAddr;
-  EFI_STATUS      Status;
-
-  if (gMlb.NumRamPartitions > MLB_MAX_MEM_REGIONS) {
-    return EFI_UNSUPPORTED;
-  }
-  for (i = 0; i < gMlb.NumRamPartitions; i++) {
-    Parts[i].Base = gMlb.RamPartitions[i].Base;
-    Parts[i].Size = gMlb.RamPartitions[i].AvailableLength;
-  }
-
-  if (!MlbRegionContainedIn (Parts, gMlb.NumRamPartitions, Base, Size)) {
-    DEBUG ((EFI_D_ERROR,
-            "MainlineBoot: ERROR: kernel window 0x%lx-0x%lx is not inside any "
-            "TZ RAM partition, refusing to boot\n", Base, Base + Size));
-    return EFI_UNSUPPORTED;
-  }
-
-  Status = MlbFdtGetNoMapRegions (gMlb.Dtb, NoMap, MLB_MAX_MEM_REGIONS, &NumNoMap);
-  if (EFI_ERROR (Status)) {
-    return EFI_SUCCESS;                      /* no /reserved-memory: nothing to check */
-  }
-  NumNoMap = MlbSortAndCombineRegions (NoMap, NumNoMap);
-
-  if (MlbRegionsOverlap (NoMap, NumNoMap, Base, Size, &Hit)) {
-    if (!gMlb.KernelParamsFromUefiVars) {
-      DEBUG ((EFI_D_ERROR,
-              "MainlineBoot: ERROR: fallback kernel window 0x%lx-0x%lx overlaps "
-              "DT no-map region 0x%lx-0x%lx (firmware memory); KernelBaseAddr/"
-              "KernelSize UEFI variables are required on this platform\n",
-              Base, Base + Size, Hit.Base, Hit.Base + Hit.Size));
-      return EFI_UNSUPPORTED;
-    }
-    DEBUG ((EFI_D_WARN,
-            "MainlineBoot: WARNING: kernel window 0x%lx-0x%lx (UEFI vars) "
-            "overlaps DT no-map region 0x%lx-0x%lx; continuing like ABL\n",
-            Base, Base + Size, Hit.Base, Hit.Base + Hit.Size));
-  }
-  return EFI_SUCCESS;
-}
-
 EFI_STATUS
 EFIAPI
 MainlineBootBoot (
   VOID
   )
 {
-  EFI_STATUS      Status;
-  MLB_LAYOUT_OUT  L;
-  UINT64          InitrdAddr = 0;
+  EFI_STATUS  Status;
+  VOID       *DtbBuf;
 
   if (!gMlb.Initialized) {
     DEBUG ((EFI_D_ERROR, "MainlineBoot: MainlineBootInit() not done\n"));
@@ -715,64 +648,49 @@ MainlineBootBoot (
     return EFI_NOT_READY;
   }
 
-  /* --- address layout (ABL UpdateBootParams) --- */
-  Status = MlbLayout (&L);
-  if (EFI_ERROR (Status)) {
+  /* --- 0. the kernel must carry an EFI stub (PE/COFF ARM64) --- */
+  if (!MlbKernelHasEfiStub (gMlb.Kernel, gMlb.KernelSize)) {
     DEBUG ((EFI_D_ERROR,
-            "MainlineBoot: layout failed (%r): kernel region 0x%lx+0x%lx "
-            "cannot hold Image (%lu bytes, image_size 0x%lx) + initrd "
-            "(%lu bytes) + 2MB DT\n",
-            Status, gMlb.KernelBaseAddr, gMlb.KernelSizeReserved,
-            (UINT64)gMlb.KernelSize, gMlb.KernelHdr.ImageSize,
-            (UINT64)gMlb.InitrdSize));
-    return Status;
+            "MainlineBoot: kernel Image has no EFI stub (CONFIG_EFI_STUB not "
+            "built?); the bare-jump path is gone, refusing to boot\n"));
+    return EFI_UNSUPPORTED;
   }
 
-  if ((L.KernelLoadAddr - gMlb.KernelHdr.TextOffset) & (SIZE_2MB - 1)) {
-    DEBUG ((EFI_D_WARN,
-            "MainlineBoot: WARNING: kernel base 0x%lx is not 2MB aligned "
-            "(arm64 boot protocol requires text_offset from a 2MB aligned base)\n",
-            L.KernelLoadAddr - gMlb.KernelHdr.TextOffset));
+  /* --- 1. stage the patched DTB in pool memory ---
+   * The EFI stub allocates kernel / initrd / its FDT copy itself through
+   * the boot services, so nothing goes into the ABL kernel window anymore
+   * and the MlbLayout() window is no longer load-bearing
+   * (MainlineBootGetLayout still reports it for diagnostics).
+   * The DTB only has to stay put until the stub copies it, which pool
+   * (EfiLoaderData) memory guarantees - raw window memory could be handed
+   * out to those stub allocations first. The 2 MB staging buffer keeps
+   * MlbUpdateDeviceTree's growth headroom identical. initrd goes through
+   * the LoadFile2 protocol, so the DT chosen initrd properties are just
+   * cleared (MlbUpdateChosen deletes stale ones on size 0). */
+  /* ACPIReclaim pages, not pool: the closed firmware may scrub loader/
+   * boot-services memory after ExitBootServices; EfiACPIReclaimMemory is
+   * the loader->OS handoff type that survives for the stub to read. */
+  {
+    EFI_STATUS           PgStatus;
+    EFI_PHYSICAL_ADDRESS DtbAddr = 0;
+
+    PgStatus = gBS->AllocatePages (AllocateAnyPages, EfiACPIReclaimMemory,
+                                   EFI_SIZE_TO_PAGES (MLB_DT_SIZE_2MB),
+                                   &DtbAddr);
+    if (EFI_ERROR (PgStatus)) {
+      return PgStatus;
+    }
+    DtbBuf = (VOID *)(UINTN)DtbAddr;
   }
+  CopyMem (DtbBuf, gMlb.Dtb, gMlb.DtbSize);
 
-  DEBUG ((EFI_D_INFO, "MainlineBoot: layout:\n"));
-  DEBUG ((EFI_D_INFO, "  KernelBaseAddr      0x%016lx\n", gMlb.KernelBaseAddr));
-  DEBUG ((EFI_D_INFO, "  KernelLoadAddr      0x%016lx (+0x%lx text_offset, %lu bytes, image_size 0x%lx)\n",
-          L.KernelLoadAddr, L.KernelLoadAddr - gMlb.KernelBaseAddr,
-          (UINT64)gMlb.KernelSize, gMlb.KernelHdr.ImageSize));
-  DEBUG ((EFI_D_INFO, "  DeviceTreeLoadAddr  0x%016lx (%lu bytes, 2MB window)\n",
-          L.DeviceTreeLoadAddr, (UINT64)gMlb.DtbSize));
-  DEBUG ((EFI_D_INFO, "  RamdiskLoadAddr     0x%016lx (%lu bytes)\n",
-          L.RamdiskLoadAddr, (UINT64)gMlb.InitrdSize));
-  DEBUG ((EFI_D_INFO, "  KernelEndAddr       0x%016lx\n", L.KernelEndAddr));
-
-  Status = MlbCheckKernelWindow (&L);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  /* --- 1. copy images into place (ABL LoadAddrAndDTUpdate / BootLinux) --- */
-  DEBUG ((EFI_D_INFO, "MainlineBoot: copying kernel...\n"));
-  gBS->CopyMem ((VOID *)(UINTN)L.KernelLoadAddr, gMlb.Kernel, gMlb.KernelSize);
-
-  if (gMlb.Initrd != NULL && gMlb.InitrdSize != 0) {
-    DEBUG ((EFI_D_INFO, "MainlineBoot: copying initrd...\n"));
-    gBS->CopyMem ((VOID *)(UINTN)L.RamdiskLoadAddr, gMlb.Initrd, gMlb.InitrdSize);
-    InitrdAddr = L.RamdiskLoadAddr;
-  }
-
-  DEBUG ((EFI_D_INFO, "MainlineBoot: copying dtb...\n"));
-  gBS->CopyMem ((VOID *)(UINTN)L.DeviceTreeLoadAddr, gMlb.Dtb, gMlb.DtbSize);
-
-  /* --- 2..4. update the device tree in place --- */
-  Status = MlbUpdateDeviceTree ((VOID *)(UINTN)L.DeviceTreeLoadAddr,
-                                MLB_DT_SIZE_2MB,
+  Status = MlbUpdateDeviceTree (DtbBuf, MLB_DT_SIZE_2MB,
                                 gMlb.CmdLineLoaded ? gMlb.CmdLine : NULL,
-                                InitrdAddr, gMlb.InitrdSize);
+                                0, 0);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "MainlineBoot: device tree update failed: %r\n",
             Status));
-    return Status;
+    return Status;        /* ACPIReclaim staging stays, harmless */
   }
   /* screen stays quiet on the success path (debug port only) */
   DEBUG ((EFI_D_INFO,
@@ -780,20 +698,24 @@ MainlineBootBoot (
           (UINT64)gMlb.KernelSize, (UINT64)gMlb.InitrdSize,
           gMlb.CmdLineLoaded ? "yes" : "no"));
 
-  /* --- 5. turn off display before kernel handoff ---
+  /* --- 2. publish DTB + initrd for the stub (configuration table) --- */
+  Status = MlbInstallFdtConfigTable (DtbBuf);
+  if (EFI_ERROR (Status)) {
+    return Status;                    /* DtbBuf leaked on purpose: the table entry must stay valid */
+  }
+  Status = MlbInstallInitrdMedia ();
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  /* --- 3. turn off display before kernel handoff ---
    * The panel must not be left in ABL's state during the kernel transition.
    * msm DRM initializes it from scratch after boot. This eliminates the
-   * white-flash / panel-abnormal-state sequence. */
+   * white-flash / panel-abnormal-state sequence. The GOP itself is removed
+   * right before StartImage() (MlbDetachGop) so the kernel gets no efifb. */
   {
-    EFI_GRAPHICS_OUTPUT_PROTOCOL  *Gop = NULL;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL  *Gop = MlbLocateGop ();
 
-    if (gST != NULL && gST->ConsoleOutHandle != NULL) {
-      gBS->HandleProtocol (gST->ConsoleOutHandle, &gEfiGraphicsOutputProtocolGuid,
-                           (VOID **)&Gop);
-    }
-    if (Gop == NULL) {
-      gBS->LocateProtocol (&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
-    }
     if (Gop != NULL && Gop->Mode != NULL && Gop->Mode->Info != NULL) {
       /* Black out the framebuffer — panel shows nothing during kernel boot */
       gBS->SetMem ((VOID *)(UINTN)Gop->Mode->FrameBufferBase,
@@ -806,28 +728,11 @@ MainlineBootBoot (
     }
   }
 
-  /* --- 6. final addresses, ExitBootServices, hardware quiesce --- */
-  DEBUG ((EFI_D_INFO,
-          "MainlineBoot: jumping to kernel: entry 0x%lx, x0 (dtb) 0x%lx%a\n",
-          L.KernelLoadAddr, L.DeviceTreeLoadAddr,
-          InitrdAddr ? "" : " (no initrd)"));
-  DEBUG ((EFI_D_INFO, "MainlineBoot: shutting down UEFI boot services\n"));
-
-  Status = MlbShutdownUefiBootServices ();
-  if (EFI_ERROR (Status)) {
-    /* Boot services may still be alive here (ExitBootServices failed). */
-    DEBUG ((EFI_D_ERROR,
-            "MainlineBoot: ERROR: ExitBootServices failed: %r\n", Status));
-    return Status;
-  }
-
-  /* ===== No boot services / DEBUG from here on ===== */
-  MlbPreparePlatformHardware ();
-
-  /* --- 6. jump --- */
-  MlbJumpToKernel (L.KernelLoadAddr, L.DeviceTreeLoadAddr);
-
-  /* not reached */
-  CpuDeadLoop ();
-  return EFI_NOT_STARTED;
+  /* --- 4. start the kernel EFI stub ---
+   * ExitBootServices, the cache/MMU quiesce and the kernel jump are the
+   * stub's job now; MlbBootKernelEfiStub() returns only on failure (when
+   * it does, boot services are still alive, so BootApp can report and
+   * return to the boot menu). */
+  Status = MlbBootKernelEfiStub (gMlb.CmdLineLoaded ? gMlb.CmdLine : NULL);
+  return Status;
 }

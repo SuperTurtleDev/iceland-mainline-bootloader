@@ -1,14 +1,14 @@
 /** @file MainlineBootLib.h
 
-  ABL-style (non EFI-stub) mainline Linux loader.
+  ABL-style image loading with a Linux EFI stub kernel handoff.
 
   Usage:
     MainlineBootInit ();                 // RAM partitions, KernelBaseAddr/Size
-    MainlineBootLoadKernel (buf, size);  // arm64 "Image" (uncompressed)
+    MainlineBootLoadKernel (buf, size);  // arm64 "Image" with CONFIG_EFI_STUB
     MainlineBootLoadDtb    (buf, size);  // flattened device tree blob
     MainlineBootLoadInitrd (buf, size);  // optional cpio (newc) / compressed
     MainlineBootLoadBootcfg(buf, size);  // optional "cmdline=..." text file
-    MainlineBootBoot ();                 // ExitBootServices + jump, no return
+    MainlineBootBoot ();                 // config table + EFISTUB, no return
 
   All Load* functions copy the caller's buffer into library-owned memory, so
   the caller may reuse/free its buffer afterwards. Calling a Load* function
@@ -97,16 +97,32 @@ MainlineBootLoadInitrd (
   );
 
 /**
-  Place kernel/initrd/DTB using the ABL UpdateBootParams layout, patch the
-  DTB (/memory from RAM partitions minus no-map carveouts, /chosen bootargs,
-  linux,initrd-start/end, kaslr-seed, rng-seed), ExitBootServices, disable
-  caches/MMU and jump to the kernel with x0 = DTB.
+  Hand the kernel to its EFI stub. The patched DTB (memory map from RAM
+  partitions, /chosen bootargs / kaslr-seed / rng-seed) is published in the
+  EFI configuration table (gFdtTableGuid), the initrd through a LoadFile2
+  protocol on the LINUX_EFI_INITRD_MEDIA_GUID device path, the bootcfg
+  cmdline as the kernel image LoadOptions; the kernel Image is then started
+  with LoadImage()/StartImage(). The stub does its own kernel relocation,
+  initrd load, FDT rebuild, ExitBootServices, cache/MMU quiesce and jump.
+
+  The ABL UpdateBootParams window (KernelBaseAddr/KernelSize) no longer
+  receives any image - the stub allocates kernel/initrd/FDT itself - and is
+  reported by MainlineBootGetLayout() for diagnostics only.
+
+  The display is blacked out and every EFI_GRAPHICS_OUTPUT_PROTOCOL instance
+  is uninstalled right before StartImage(), so the stub finds no display and
+  the kernel starts without efifb, exactly like the bare-jump path did; msm
+  DRM initialises the panel from scratch. Nothing is printed to the panel
+  after that point.
 
   Does not return on success.
 
   @retval EFI_NOT_READY         Kernel or DTB not loaded / Init not called.
-  @retval EFI_BUFFER_TOO_SMALL  Kernel region too small for the layout.
-  @retval other                 DT update or ExitBootServices failure.
+  @retval EFI_UNSUPPORTED       Kernel Image has no EFI stub (no PE/COFF
+                                ARM64 header, i.e. CONFIG_EFI_STUB not built).
+  @retval other                 DT update, protocol/table install, or the
+                                kernel EFI stub itself failed (any return
+                                from the stub is a failure).
 **/
 EFI_STATUS
 EFIAPI
@@ -161,8 +177,10 @@ MainlineBootGetInfo (
   );
 
 /**
-  Compute (without booting) the load addresses that MainlineBootBoot() would
-  use with the currently loaded images. Useful for "dry run" printing.
+  Compute (without booting) the ABL UpdateBootParams window layout for the
+  currently loaded images. MainlineBootBoot() no longer places anything in
+  that window (the kernel EFI stub allocates itself), so this is diagnostics
+  only - BootUtil.efi uses it to report the legacy boot window.
 
   @retval EFI_NOT_READY         Init not done or kernel not loaded.
   @retval EFI_BUFFER_TOO_SMALL  Layout does not fit the kernel region.

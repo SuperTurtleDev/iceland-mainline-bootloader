@@ -862,7 +862,7 @@ BootAppEntry (
   }
 
   /* 6. Boot.  Silent on success: MainlineBootBoot() does not return
-   *    (ExitBootServices + jump to the kernel); a failure lands in
+   *    (config table + kernel EFI stub handoff); a failure lands in
    *    BootAppFail() and is printed. */
   Status = MainlineBootBoot ();
   return BootAppFail (L"MainlineBootBoot", Status);

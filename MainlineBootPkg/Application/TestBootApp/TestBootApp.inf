@@ -26,6 +26,7 @@
   ArmPkg/ArmPkg.dec
   EmbeddedPkg/EmbeddedPkg.dec
   QcomModulePkg/QcomModulePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
   MainlineBootPkg/MainlineBootPkg.dec
 
 [LibraryClasses]
@@ -47,6 +48,14 @@
   gEfiGraphicsOutputProtocolGuid ## SOMETIMES_CONSUMES
   gEfiUsbDeviceProtocolGuid     ## CONSUMES
   gEfiChipInfoProtocolGuid      ## SOMETIMES_CONSUMES (USB serial string)
+
+[Guids]
+  gEfiMemoryAttributesTableGuid  ## SOMETIMES_CONSUMES (cfgtbl dump)
+  gFdtTableGuid                  ## SOMETIMES_CONSUMES (cfgtbl dump)
+  gEfiDxeServicesTableGuid       ## SOMETIMES_CONSUMES (cfgtbl dump)
+  gEfiHobListGuid                ## SOMETIMES_CONSUMES (cfgtbl dump)
+  gEfiMemoryTypeInformationGuid  ## SOMETIMES_CONSUMES (cfgtbl dump)
+  gEfiDebugImageInfoTableGuid    ## SOMETIMES_CONSUMES (cfgtbl dump)
 
 [Depex]
   TRUE
