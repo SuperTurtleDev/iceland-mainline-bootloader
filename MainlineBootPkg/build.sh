@@ -5,7 +5,7 @@
 #  which references this script).  Runs inside the shared container started
 #  through ../podman_container/runin.sh by the meta repo's ./build.sh.
 #
-#  Produces $OUT/BootApp.efi, $OUT/TestBootApp.efi, $OUT/symbols/ (ELF .dll
+#  Produces $OUT/{BootApp,TestBootApp,BdsApp}.efi, $OUT/symbols/ (ELF .dll
 #  + linker maps) and a build-flags fragment ($OUT/container-fragment.txt)
 #  that the host script merges into buildinfo.txt.
 #
@@ -130,10 +130,15 @@ build -p MainlineBootPkg/MainlineBootPkg.dsc -a "$ARCH" -t "$TOOLCHAIN" -b "$TAR
 # symbols, referenced by the .efi's CodeView debug entry) and <APP>.map.
 # BootUtil is a diagnostic probe (no symbols exported, not in the ESP/FV).
 mkdir -p "$OUT/symbols"
-for APP in BootApp TestBootApp; do
+for APP in BootApp TestBootApp BdsApp; do
   MOD_DIR="$WORKSPACE/Build/MainlineBoot/${TARGET}_${TOOLCHAIN}/${ARCH}/MainlineBootPkg/Application/$APP/$APP"
   EFI="$(find "$MOD_DIR" -type f -name "$APP.efi" -path '*OUTPUT*' | head -1)"
   test -n "$EFI" && test -s "$EFI"
+  # The original canoe layout reserves only the first MiB before config FAT.
+  if [ "$APP" = BdsApp ] && [ "$(stat -c %s "$EFI")" -ge 1048576 ]; then
+    printf 'BdsApp.efi exceeds the 1 MiB FAT-container image reservation\n' >&2
+    exit 1
+  fi
   cp "$EFI" "$OUT/$APP.efi"
   test -s "$MOD_DIR/DEBUG/$APP.dll"
   test -s "$MOD_DIR/DEBUG/$APP.map"
@@ -175,4 +180,4 @@ test -s "$OUT/esp.img"
   echo "                           /EFI/BOOT/BOOTAA64.EFI = BootApp.efi"
 } > "$OUT/container-fragment.txt"
 
-echo "build.sh: BootApp.efi + TestBootApp.efi -> $OUT"
+echo "build.sh: BootApp.efi + TestBootApp.efi + BdsApp.efi -> $OUT"

@@ -1,0 +1,51 @@
+## @file
+# Standard UEFI boot-option handling, scoped to applications.
+# Copyright (c) 2007 - 2019, Intel Corporation. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = BdsBootManagerLib
+  FILE_GUID = 62C64559-DA4B-4142-8240-5B8AF9A4D72D
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS = UefiBootManagerLib|UEFI_APPLICATION
+
+[Sources]
+  BmBoot.c
+  BmConnect.c
+  BmLoadOption.c
+  BmMisc.c
+  BmLaunch.c
+  InternalBm.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  DxeServicesLib
+  MemoryAllocationLib
+  PeCoffGetEntryPointLib
+  PrintLib
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Guids]
+  gEfiGlobalVariableGuid
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiFirmwareVolume2ProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiLoadFileProtocolGuid
+  gEfiPciIoProtocolGuid
+  gEfiRamDiskProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiUsbIoProtocolGuid

@@ -56,9 +56,24 @@
   TimerLib|ArmPkg/Library/ArmArchTimerLib/ArmArchTimerLib.inf
   ArmGenericTimerCounterLib|ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.inf
   MainlineBootLib|MainlineBootPkg/Library/MainlineBootLib/MainlineBootLib.inf
+  UefiBootManagerLib|MainlineBootPkg/Library/BdsBootManagerLib/UefiBootManagerLib.inf
+  DxeServicesLib|MdePkg/Library/DxeServicesLib/DxeServicesLib.inf
+  PeCoffGetEntryPointLib|MdePkg/Library/BasePeCoffGetEntryPointLib/BasePeCoffGetEntryPointLib.inf
+  UefiDriverEntryPoint|MdePkg/Library/UefiDriverEntryPoint/UefiDriverEntryPoint.inf
+  SfbConfigStoreLib|MainlineBootPkg/Library/SfbConfigStoreLib/SfbConfigStoreLib.inf
+  SfbSecurityLib|MainlineBootPkg/Library/SfbSecurityLib/SfbSecurityLib.inf
+  SfbMemFixupLib|MainlineBootPkg/Library/SfbMemFixupLib/SfbMemFixupLib.inf
+  MbedTlsLib|MainlineBootPkg/Library/MbedTlsLib/MbedTlsLib.inf
+  DiskIoDxeLib|MainlineBootPkg/Library/DiskIoDxeLib/DiskIoLib.inf
+  UnicodeCollationEngLib|MainlineBootPkg/Library/UnicodeCollationEngLib/EnglishLib.inf
+  FastbootLib|MainlineBootPkg/Library/CanoeFastbootLib/CanoeFastbootLib.inf
+  UefiVariableCommandsLib|MainlineBootPkg/Library/UefiVariableCommandsLib/UefiVariableCommandsLib.inf
+  RngLib|MdePkg/Library/BaseRngLibNull/BaseRngLibNull.inf
+  SynchronizationLib|MdePkg/Library/BaseSynchronizationLib/BaseSynchronizationLib.inf
 
 [LibraryClasses.AARCH64]
   ArmLib|ArmPkg/Library/ArmLib/ArmBaseLib.inf
+  CompilerIntrinsicsLib|ArmPkg/Library/CompilerIntrinsicsLib/CompilerIntrinsicsLib.inf
   NULL|ArmPkg/Library/CompilerIntrinsicsLib/CompilerIntrinsicsLib.inf
 
 [BuildOptions.common]
@@ -71,6 +86,8 @@
   # makefile). Left as a make variable so it expands from the environment
   # exported by build.sh, exactly like QcomModulePkg.dsc does.
   GCC:*_*_*_DLINK_FLAGS   = $(CLANG_EXTRA_DLINK_FLAGS)
+  # Legacy debug/performance sentinels and packed IFR wire-format GUIDs.
+  GCC:*_CLANG35_*_CC_FLAGS = -Wno-unused-but-set-variable -Wno-unaligned-access
   GCC:*_*_*_CC_FLAGS      = -DPRODUCT_NAME=\"$(BOARD_BOOTLOADER_PRODUCT_NAME)\"
   !if $(MAINLINE_REMOVE_CARVEOUT) == 1
   GCC:*_*_*_CC_FLAGS      = -DMAINLINE_REMOVE_CARVEOUT=1
@@ -86,6 +103,7 @@
 
 [Components.common]
   MainlineBootPkg/Application/TestBootApp/TestBootApp.inf
-MainlineBootPkg/Application/BootApp/BootApp.inf
-MainlineBootPkg/Application/BootUtil/BootUtil.inf
-MainlineBootPkg/Application/QemuBoot/QemuBoot.inf
+  MainlineBootPkg/Application/BootApp/BootApp.inf
+  MainlineBootPkg/Application/BootUtil/BootUtil.inf
+  MainlineBootPkg/Application/QemuBoot/QemuBoot.inf
+  MainlineBootPkg/Application/BdsApp/BdsApp.inf

@@ -1,9 +1,8 @@
 ## @file MainlineBootPkg.fdf
 #
-#  Flash layout for MainlineBootPkg. This is QcomModulePkg.fdf with the
-#  LinuxLoader INF swapped for TestBootApp so the resulting FVMAIN_COMPACT.Fv
-#  can be wrapped by QcomModulePkg/Tools/image_header.py into an "abl"
-#  partition ELF exactly like the stock ABL build does.
+#  Flash layout for the BdsApp UEFI boot manager. FVMAIN_COMPACT.Fv can be
+#  wrapped by QcomModulePkg/Tools/image_header.py into an ABL partition ELF.
+#  The standalone BdsApp.efi also supports the canoe BDS image slot.
 #
 #  SPDX-License-Identifier: BSD-3-Clause-Clear
 ##
@@ -41,7 +40,7 @@ READ_LOCK_CAP      = TRUE
 READ_LOCK_STATUS   = TRUE
 FvNameGuid         = 046fae99-cf2e-49ed-a6a8-a1488b7e80d3
 
-INF MainlineBootPkg/Application/TestBootApp/TestBootApp.inf
+INF MainlineBootPkg/Application/BdsApp/BdsApp.inf
 
 [FV.FVMAIN_COMPACT]
 FvAlignment        = 8

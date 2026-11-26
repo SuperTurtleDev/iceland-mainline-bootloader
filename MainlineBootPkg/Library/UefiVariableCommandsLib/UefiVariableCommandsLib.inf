@@ -1,0 +1,25 @@
+## @file
+# UEFI runtime variable command parser.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = UefiVariableCommandsLib
+  FILE_GUID = E538E619-102D-49BE-A468-9F74FC3D9193
+  MODULE_TYPE = BASE
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS = UefiVariableCommandsLib
+
+[Sources]
+  UefiVariableCommands.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  PrintLib
+  UefiRuntimeServicesTableLib

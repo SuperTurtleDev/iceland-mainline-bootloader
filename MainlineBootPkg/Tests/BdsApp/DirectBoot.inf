@@ -1,0 +1,49 @@
+## @file
+# Minimal direct-entry BDS for test firmware only.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = DirectBoot
+  FILE_GUID = 6D33944A-EC75-4855-A54D-809C75241F6C
+  MODULE_TYPE = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT = DirectBootEntry
+
+[Sources]
+  DirectBoot.c
+  Launcher.c
+  TestCommon.c
+  TestCommon.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  PrintLib
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  DxeServicesLib
+
+[Protocols]
+  gEfiBdsArchProtocolGuid
+  gEfiSimpleTextInProtocolGuid
+  gEfiSimpleTextOutProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiPartTypeSystemPartGuid
+  gEfiFileInfoGuid
+  gEfiEventReadyToBootGuid
+  gEfiEndOfDxeEventGroupGuid
+
+[Depex]
+  TRUE

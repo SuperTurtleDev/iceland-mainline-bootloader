@@ -1,0 +1,41 @@
+## @file
+# Independent payload reached through the real BdsApp boot manager.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = Payload
+  FILE_GUID = 1ED7E935-DF72-4D50-A936-1500CEB6AA9A
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT = PayloadEntry
+
+[Sources]
+  Payload.c
+  VariableTests.c
+  TestCommon.c
+  TestCommon.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  PrintLib
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  UefiVariableCommandsLib
+
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiPartTypeSystemPartGuid

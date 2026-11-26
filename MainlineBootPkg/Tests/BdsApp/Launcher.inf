@@ -1,0 +1,41 @@
+## @file
+# External BdsApp QEMU variable-seeding launcher.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = Launcher
+  FILE_GUID = EFB62FD2-D498-4ED9-9AE1-BDB627B372D2
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT = LauncherEntry
+
+[Sources]
+  Launcher.c
+  TestCommon.c
+  TestCommon.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  PrintLib
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  DxeServicesLib
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiPartTypeSystemPartGuid
+  gEfiFileInfoGuid
+  gEfiEventReadyToBootGuid

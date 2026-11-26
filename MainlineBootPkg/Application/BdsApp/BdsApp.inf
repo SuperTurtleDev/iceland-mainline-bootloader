@@ -1,0 +1,88 @@
+## @file
+#  Application-mode UEFI boot manager with canoe platform services.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = BdsApp
+  FILE_GUID                      = 9D4A0F24-3576-4FC2-8F7C-631EDDC4F89A
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = BdsAppEntryPoint
+
+[Sources]
+  BdsApp.c
+  BdsApp.h
+  BdsPlatform.c
+  BdsMenu.c
+  BdsMenu.h
+  BdsSetup.c
+  BdsSetup.h
+  BdsBrowser.c
+  BdsStorage.c
+  BdsEntries.c
+  BdsEntries.h
+  BdsUsbDisk.c
+  BdsUsbDisk.h
+  BdsUsbMsd.c
+  BdsUsbMsd.h
+
+[Packages]
+  MainlineBootPkg/MainlineBootPkg.dec
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  ArmPkg/ArmPkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiBootManagerLib
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  MemoryAllocationLib
+  PrintLib
+  FastbootLib
+  SfbConfigStoreLib
+  SfbSecurityLib
+  SfbMemFixupLib
+  UnicodeCollationEngLib
+  DiskIoDxeLib
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiPartTypeSystemPartGuid
+  gEfiFileInfoGuid
+  gEfiFileSystemInfoGuid
+  gEfiFileSystemVolumeLabelInfoIdGuid
+  gEfiUfsLU0Guid
+  gEfiUfsLU1Guid
+  gEfiUfsLU2Guid
+  gEfiUfsLU3Guid
+  gEfiUfsLU4Guid
+  gEfiUfsLU5Guid
+  gEfiUfsLU6Guid
+  gEfiUfsLU7Guid
+
+[Protocols]
+  gEfiDevicePathProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiLoadedImageDevicePathProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+  gEfiPartitionRecordGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiDiskIoProtocolGuid
+  gEfiUsb2HcProtocolGuid
+  gEfiPciIoProtocolGuid
+  gEfiUsbIoProtocolGuid
+  gEfiSecurityArchProtocolGuid
+  gEfiSecurity2ArchProtocolGuid
+  gEfiResetReasonProtocolGuid
