@@ -1,15 +1,23 @@
 /*
- * BIOS Setup adapted from Canoe SuperFbAdvanced: USB mass-storage export of UFS LUNs, partitions and the
- * config store, the grouped volume browser, and boot entry order/deletion.
+ * BIOS Setup adapted from Canoe SuperFbAdvanced: USB mass-storage export of
+ * UFS LUNs, partitions and the config store, plus boot entry order/deletion.
  *
  *   BIOS Setup
+ *    |- Enter Fastboot
  *    |- USB Mass Storage
  *    |   |- Export a partition   -> LUN picker -> partition picker -> mode
  *    |   |- Export a LUN         -> LUN picker -> mode
  *    |   `- Export Config Store  -> mode
- *    |- Volumes
  *    |- Boot Order
- *    `- Boot Entries
+ *    |- Boot Entries
+ *    |- File Browser
+ *    |- Refresh Devices
+ *    `- Secure Fastboot
+ *
+ * When Secure Fastboot is locked, only "Enter Fastboot" is listed; the
+ * privileged rows reappear after a verified fastboot challenge in the same
+ * boot session. Hidden rows are never entered, so no handler reports a
+ * policy error.
  *
  * A partition is exported behind a RAM-backed fake GPT so the host sees a
  * valid one-partition disk instead of an uninitialized one; the fake tables
@@ -36,7 +44,7 @@
 #include <Library/PartitionTableUpdate.h>
 #include <Library/PrintLib.h>
 #include <Library/SfbConfigStore.h>
-#include <Library/SfbSecurity.h>
+#include <Library/BdsSecurityLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Protocol/BlockIo.h>
@@ -143,8 +151,8 @@ SfbAdvChoose (
 /* ---- mount mode chooser -------------------------------------------------- */
 
 /*
- * TRUE = export read-only. Returns FALSE and leaves *ReadOnly untouched when
- * the user backs out.
+ * *ReadOnly = TRUE for a read-only export. Returns FALSE without changing it
+ * when the user backs out.
  */
 STATIC
 BOOLEAN
@@ -161,7 +169,7 @@ SfbAdvChooseMountMode (
   INTN                 Chosen;
 
   UnicodeSPrint (Subtitle, sizeof (Subtitle), L"Mount %s how?", Target);
-  Chosen = SfbAdvChoose (L"USB Mass Storage", Subtitle, Rows, 2, 0);
+  Chosen = SfbAdvChoose (L"USB Mass Storage", Subtitle, Rows, ARRAY_SIZE (Rows), 0);
   if (Chosen < 0) {
     return FALSE;
   }
@@ -727,8 +735,8 @@ SfbAdvExportConfigFlow (
     SfbReportStatus (L"Could not export the config store", Status);
   }
 
-  // Certificates and MEMCFG are a boot-session snapshot. Configuration
-  // changes on the host take effect next boot; no boot-entry file is consulted.
+  // MEMCFG is a boot-session snapshot. Configuration changes on the host
+  // take effect next boot; no boot-entry file is consulted.
 }
 
 // BootOrder is edited as a UINT16 array. Missing or malformed Boot#### values
@@ -1057,424 +1065,6 @@ SfbRunManagementMenu (
   }
 }
 
-/* ---- grouped volume browser (BIOS Setup > Volumes) -------------------------- */
-
-/* TRUE for the efisp config container volume. */
-STATIC
-BOOLEAN
-SfbAdvIsConfigVolume (
-  IN EFI_HANDLE  Volume
-  )
-{
-  EFI_HANDLE  Config = NULL;
-
-  return (BOOLEAN)(!EFI_ERROR (SfbConfigStoreGetFs (NULL, &Config)) &&
-                   Config == Volume);
-}
-
-/*
- * The whole-disk handle behind a volume: truncate the volume's device path
- * before its final node and locate the BlockIo handle of what remains.
- */
-STATIC
-EFI_HANDLE
-SfbAdvParentDiskHandle (
-  IN EFI_HANDLE  Volume
-  )
-{
-  EFI_STATUS                Status;
-  EFI_DEVICE_PATH_PROTOCOL  *Dp = NULL;
-  EFI_DEVICE_PATH_PROTOCOL  *Node;
-  EFI_DEVICE_PATH_PROTOCOL  *Last = NULL;
-  EFI_DEVICE_PATH_PROTOCOL  *Trunc;
-  EFI_DEVICE_PATH_PROTOCOL  *Remaining;
-  EFI_HANDLE                Parent = NULL;
-  EFI_BLOCK_IO_PROTOCOL     *BlkIo = NULL;
-  UINTN                     Len;
-
-  Status = gBS->HandleProtocol (
-                  Volume,
-                  &gEfiDevicePathProtocolGuid,
-                  (VOID **)&Dp
-                  );
-  if (EFI_ERROR (Status) || (Dp == NULL)) {
-    return NULL;
-  }
-
-  Node = Dp;
-  while (!IsDevicePathEnd (Node)) {
-    Last = Node;
-    Node = NextDevicePathNode (Node);
-  }
-
-  if ((Last == NULL) || (Last == Dp)) {
-    return NULL;
-  }
-
-  Len   = (UINTN)((UINT8 *)Last - (UINT8 *)Dp);
-  Trunc = AllocatePool (Len + sizeof (EFI_DEVICE_PATH_PROTOCOL));
-  if (Trunc == NULL) {
-    return NULL;
-  }
-
-  CopyMem (Trunc, Dp, Len);
-  SetDevicePathEndNode ((UINT8 *)Trunc + Len);
-
-  Remaining = Trunc;
-  Status    = gBS->LocateDevicePath (&gEfiBlockIoProtocolGuid, &Remaining, &Parent);
-  FreePool (Trunc);
-  if (EFI_ERROR (Status) || (Parent == NULL)) {
-    return NULL;
-  }
-
-  if (EFI_ERROR (
-        gBS->HandleProtocol (
-               Parent,
-               &gEfiBlockIoProtocolGuid,
-               (VOID **)&BlkIo
-               )
-        ) ||
-      (BlkIo == NULL) || (BlkIo->Media == NULL) ||
-      BlkIo->Media->LogicalPartition)
-  {
-    return NULL;
-  }
-
-  return Parent;
-}
-
-/* UFS LUN number of a whole-disk handle, or -1 when it is not a UFS LUN. */
-STATIC
-INTN
-SfbAdvLunOfDisk (
-  IN EFI_HANDLE  Disk
-  )
-{
-  UINT32  Lun;
-  UINT32  MaxLuns = GetMaxLuns ();
-  UINTN   PartitionIndex;
-
-  for (Lun = 0; Lun < MaxLuns && Lun < MAX_LUNS; Lun++) {
-    for (PartitionIndex = 0; PartitionIndex < MIN (Ptable[Lun].MaxHandles, MAX_NUM_PARTITIONS); PartitionIndex++) {
-      if (Ptable[Lun].HandleInfoList[PartitionIndex].Handle == NULL) {
-        continue;
-      }
-
-      if (SfbAdvParentDiskHandle (Ptable[Lun].HandleInfoList[PartitionIndex].Handle) == Disk) {
-        return (INTN)Lun;
-      }
-    }
-  }
-
-  return -1;
-}
-
-#define SFB_ADV_GROUPS_MAX  16
-/* Volume label of one SFS handle, or an empty string. */
-STATIC
-VOID
-SfbAdvVolumeLabel (
-  IN EFI_HANDLE  Volume,
-  OUT CHAR16     *Label,
-  IN UINTN       LabelChars
-  )
-{
-  EFI_FILE_PROTOCOL  *Root = NULL;
-
-  Label[0] = L'\0';
-  if (!EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) && (Root != NULL)) {
-    SfbGetVolumeLabel (Root, Label, LabelChars);
-    Root->Close (Root);
-  }
-}
-
-/*
- * The grouped volume browser, as a two-level menu: level one picks a storage
- * group - "LUN x" per UFS LUN, "Disk <label>" per other real disk such as a
- * USB stick, "Config Store" for the efisp config container - and level two
- * lists that group's file systems. Selecting a volume browses its root through the
- * ordinary file browser.
- */
-#define SFB_ADV_GROUP_VOLS_MAX  32
-
-typedef struct {
-  EFI_HANDLE    Key; /* parent disk handle; the volume itself when parentless */
-  INTN          Lun; /* UFS LUN, or -1 */
-  CHAR16        Title[SFB_ADV_ROW_CHARS];
-} SFB_ADV_GROUP;
-
-/*
- * Snapshot the volumes and their groups. Returns the volume count and fills
- * Groups/VolGroups: VolGroups[i] is the Groups[].Key the volume belongs to.
- * The config container belongs to one synthetic group (Key = NULL).
- * Volumes whose parent disk cannot be resolved each form their own group.
- */
-STATIC
-UINTN
-SfbAdvCollectVolumes (
-  OUT SFB_ADV_GROUP  *Groups,
-  OUT UINTN          *GroupCount,
-  IN UINTN           GroupsMax,
-  OUT EFI_HANDLE     *Volumes,
-  OUT EFI_HANDLE     *VolGroups,
-  IN UINTN           VolMax,
-  OUT BOOLEAN        *HaveConfig
-  )
-{
-  EFI_STATUS  Status;
-  EFI_HANDLE  *All  = NULL;
-  UINTN       Count = 0;
-  UINTN       Index;
-  UINTN       VolCount = 0;
-  UINTN       G        = 0;
-  UINTN       GroupIdx;
-  UINTN       Move;
-
-  *GroupCount = 0;
-  *HaveConfig = FALSE;
-
-  // Standard SFS enumeration includes USB media and the FAT container.
-  Status = SfbLocateVolumes (&All, &Count);
-  if (EFI_ERROR (Status) || (All == NULL)) {
-    return 0;
-  }
-
-  for (Index = 0; Index < Count && VolCount < VolMax; Index++) {
-    EFI_HANDLE  Key;
-    INTN        Lun = -1;
-    CHAR16      Label[SFB_DESC_CHARS];
-
-    if (SfbAdvIsConfigVolume (All[Index])) {
-      *HaveConfig = TRUE;
-      Key         = NULL; /* the synthetic Config Store group */
-    } else {
-      EFI_HANDLE  Parent = SfbAdvParentDiskHandle (All[Index]);
-
-      Key = (Parent != NULL) ? Parent : All[Index];
-      if (Parent != NULL) {
-        Lun = SfbAdvLunOfDisk (Parent);
-      }
-    }
-
-    Volumes[VolCount]   = All[Index];
-    VolGroups[VolCount] = Key;
-
-    /* Find or create the group, UFS LUNs in ascending order first, other
-     * keys after, the synthetic virtual group kept at the very end. */
-    for (GroupIdx = 0; GroupIdx < G; GroupIdx++) {
-      if (Groups[GroupIdx].Key == Key) {
-        break;
-      }
-    }
-
-    if (GroupIdx == G) {
-      if (G >= GroupsMax) {
-        continue;
-      }
-
-      if (Key == NULL) {
-        GroupIdx = G;   /* virtual group appended last */
-      } else if (Lun >= 0) {
-        for (GroupIdx = 0; GroupIdx < G; GroupIdx++) {
-          if ((Groups[GroupIdx].Key == NULL) ||
-              ((Groups[GroupIdx].Lun >= 0) && (Groups[GroupIdx].Lun > Lun)))
-          {
-            break;
-          }
-        }
-
-        for (Move = G; Move > GroupIdx; Move--) {
-          Groups[Move] = Groups[Move - 1];
-        }
-      } else {
-        GroupIdx = G;
-      }
-
-      Groups[GroupIdx].Key = Key;
-      Groups[GroupIdx].Lun = Lun;
-      SfbAdvVolumeLabel (All[Index], Label, SFB_DESC_CHARS);
-      if (Key == NULL) {
-        StrCpyS (Groups[GroupIdx].Title, SFB_ADV_ROW_CHARS, L"Config Store");
-      } else if (Lun >= 0) {
-        UnicodeSPrint (
-          Groups[GroupIdx].Title,
-          sizeof (Groups[GroupIdx].Title),
-          L"LUN %d",
-          (INT32)Lun
-          );
-      } else if (Label[0] != L'\0') {
-        UnicodeSPrint (
-          Groups[GroupIdx].Title,
-          sizeof (Groups[GroupIdx].Title),
-          L"Disk %s",
-          Label
-          );
-      } else {
-        StrCpyS (Groups[GroupIdx].Title, SFB_ADV_ROW_CHARS, L"Disk");
-      }
-
-      G++;
-    }
-
-    VolCount++;
-  }
-
-  FreePool (All);
-  *GroupCount = G;
-  return VolCount;
-}
-
-STATIC
-VOID
-SfbRunVolumesMenu (
-  VOID
-  )
-{
-  SFB_ADV_GROUP  Groups[SFB_ADV_GROUPS_MAX];
-  UINTN          GroupCount = 0;
-  EFI_HANDLE     Volumes[SFB_ADV_GROUP_VOLS_MAX];
-  EFI_HANDLE     VolGroups[SFB_ADV_GROUP_VOLS_MAX];
-  UINTN          VolCount;
-
-  CHAR16 (*Labels)[SFB_ADV_ROW_CHARS];
-  CHAR16 (*Rows)[SFB_ADV_ROW_CHARS];
-  UINTN       Index;
-  UINTN       Count;
-  UINTN       Member;
-  INTN        Chosen;
-  INTN        ChosenVol;
-  BOOLEAN     HaveConfig;
-  EFI_HANDLE  Volume;
-  CHAR16      ChosenLabel[SFB_ADV_ROW_CHARS];
-
-  SfbShowEnteringScreen (L"Volumes");
-
-  while (TRUE) {
-    VolCount = SfbAdvCollectVolumes (
-                 Groups,
-                 &GroupCount,
-                 SFB_ADV_GROUPS_MAX,
-                 Volumes,
-                 VolGroups,
-                 SFB_ADV_GROUP_VOLS_MAX,
-                 &HaveConfig
-                 );
-    if ((VolCount == 0) || (GroupCount == 0)) {
-      SfbReportStatus (L"No file system volumes found", EFI_NOT_FOUND);
-      return;
-    }
-
-    Labels = AllocateZeroPool (VolCount * sizeof (*Labels));
-    if (Labels == NULL) {
-      return;
-    }
-
-    for (Index = 0; Index < VolCount; Index++) {
-      SfbAdvVolumeLabel (Volumes[Index], Labels[Index], SFB_ADV_ROW_CHARS);
-      if (Labels[Index][0] == L'\0') {
-        StrCpyS (Labels[Index], SFB_ADV_ROW_CHARS, L"Volume");
-      }
-    }
-
-    /* Level one: the storage groups. */
-    Rows = AllocateZeroPool (GroupCount * sizeof (*Rows));
-    if (Rows == NULL) {
-      FreePool (Labels);
-      return;
-    }
-
-    for (Index = 0; Index < GroupCount; Index++) {
-      StrCpyS (Rows[Index], SFB_ADV_ROW_CHARS, Groups[Index].Title);
-    }
-
-    Chosen = SfbAdvChoose (
-               L"Volumes",
-               L"Pick a storage group.",
-               Rows,
-               GroupCount,
-               0
-               );
-    FreePool (Rows);
-    if (Chosen < 0) {
-      FreePool (Labels);
-      return;
-    }
-
-    /* Level two: that group's volumes. */
-    while (TRUE) {
-      Count = 0;
-      for (Index = 0; Index < VolCount; Index++) {
-        if (VolGroups[Index] == Groups[Chosen].Key) {
-          Count++;
-        }
-      }
-
-      if (Count == 0) {
-        SfbReportStatus (L"No volumes in this group", EFI_NOT_FOUND);
-        break;
-      }
-
-      Rows = AllocateZeroPool (Count * sizeof (*Rows));
-      if (Rows == NULL) {
-        break;
-      }
-
-      Member = 0;
-      for (Index = 0; Index < VolCount; Index++) {
-        if (VolGroups[Index] == Groups[Chosen].Key) {
-          StrCpyS (Rows[Member], SFB_ADV_ROW_CHARS, Labels[Index]);
-          Member++;
-        }
-      }
-
-      ChosenVol = SfbAdvChoose (
-                    Groups[Chosen].Title,
-                    L"Pick a volume to browse.",
-                    Rows,
-                    Count,
-                    0
-                    );
-      FreePool (Rows);
-      if (ChosenVol < 0) {
-        break;   /* back to the group list */
-      }
-
-      Member         = 0;
-      Volume         = NULL;
-      ChosenLabel[0] = L'\0';
-      for (Index = 0; Index < VolCount; Index++) {
-        if (VolGroups[Index] == Groups[Chosen].Key) {
-          if ((INTN)Member == ChosenVol) {
-            Volume = Volumes[Index];
-            StrCpyS (ChosenLabel, SFB_ADV_ROW_CHARS, Labels[Index]);
-            break;
-          }
-
-          Member++;
-        }
-      }
-
-      if ((Volume != NULL) &&
-          BdsBrowseVolume (Volume, ChosenLabel, L"\\"))
-      {
-        /* The browser asked to unwind all the way out. */
-        FreePool (Labels);
-        SfbDebounceMenuExit ();
-        return;
-      }
-
-      if (Volume == NULL) {
-        break;
-      }
-
-      /* Media may have changed while browsing; rebuild this group's list. */
-    }
-
-    FreePool (Labels);
-    /* Back to level one; groups are re-collected at the top of the loop. */
-  }
-}
-
 STATIC
 VOID
 SfbRunMassStorageMenu (
@@ -1512,6 +1102,45 @@ SfbRunMassStorageMenu (
   }
 }
 
+STATIC
+VOID
+BdsRunSecureFastbootMenu (
+  VOID
+  )
+{
+  SFB_ADV_ROW  Rows[1];
+  CHAR16       Subtitle[128];
+  BOOLEAN      Enabled;
+  INTN         Chosen;
+  EFI_STATUS   Status;
+
+  SfbShowEnteringScreen (L"Secure Fastboot");
+  while (TRUE) {
+    Status = BdsSecurityGetFastbootEnabled (&Enabled);
+    if (EFI_ERROR (Status)) {
+      SfbReportStatus (L"Could not read EnableSecureFastboot", Status);
+      return;
+    }
+
+    UnicodeSPrint (
+      Subtitle, sizeof (Subtitle),
+      L"Secure Fastboot: %s. When enabled, fastboot requires authorization; USB exports are disabled.",
+      Enabled ? L"Enabled" : L"Disabled"
+      );
+    StrCpyS (Rows[0], SFB_ADV_ROW_CHARS, Enabled ? L"Disable Secure Fastboot" : L"Enable Secure Fastboot");
+    Chosen = SfbAdvChoose (L"Secure Fastboot", Subtitle, Rows, ARRAY_SIZE (Rows), 0);
+    if (Chosen < 0) {
+      return;
+    }
+
+    Status = BdsSecuritySetFastbootEnabled ((BOOLEAN)!Enabled);
+    SfbReportStatus (
+      EFI_ERROR (Status) ? L"Firmware rejected EnableSecureFastboot change" : L"Secure Fastboot setting saved",
+      Status
+      );
+  }
+}
+
 BOOLEAN
 BdsRunSetup (
   VOID
@@ -1520,32 +1149,34 @@ BdsRunSetup (
   STATIC CONST CHAR16  Rows[7][SFB_ADV_ROW_CHARS] = {
     L"Enter Fastboot",
     L"USB Mass Storage >",
-    L"Volumes >",
     L"Boot Order >",
     L"Boot Entries >",
     L"File Browser >",
-    L"Refresh Devices"
+    L"Refresh Devices",
+    L"Secure Fastboot >"
   };
-  CONST CHAR16         *LockHint =
-    L"Device locked: only fastboot authorization is available here.";
-  INTN        Chosen;
-  UINTN       RowCount;
-  EFI_STATUS  Status;
-
-  /* Locked mode exposes only the fastboot authorization interface; the rest
-   * of the menu returns after a successful challenge response this boot. */
+  CONST CHAR16  *LockHint =
+    L"Secure Fastboot locked: only fastboot authorization is available here.";
+  INTN          Chosen;
+  UINTN         RowCount;
+  EFI_STATUS    Status;
 
   SfbShowEnteringScreen (L"BIOS Setup");
 
   while (TRUE) {
-    RowCount = SfbSecurityLocked () ? 1 : ARRAY_SIZE (Rows);
-    Chosen   = SfbAdvChoose (
-                 L"BIOS Setup",
-                 RowCount == 1 ? LockHint : NULL,
-                 Rows,
-                 RowCount,
-                 0
-                 );
+    /*
+     * Locked mode exposes only the fastboot authorization interface. The
+     * privileged rows return after a verified challenge response this boot;
+     * hidden rows are never entered, so no handler reports a policy error.
+     */
+    RowCount = BdsSecurityLocked () ? 1 : ARRAY_SIZE (Rows);
+    Chosen = SfbAdvChoose (
+               L"BIOS Setup",
+               RowCount == 1 ? LockHint : NULL,
+               Rows,
+               RowCount,
+               0
+               );
     switch (Chosen) {
       case 0:
         /* The caller announces fastboot mode and runs its loop. */
@@ -1554,21 +1185,21 @@ BdsRunSetup (
         SfbRunMassStorageMenu ();
         break;
       case 2:
-        SfbRunVolumesMenu ();
-        break;
-      case 3:
         SfbRunPriorityMenu ();
         break;
-      case 4:
+      case 3:
         SfbRunManagementMenu ();
         break;
-      case 5:
+      case 4:
         BdsRunFileBrowser ();
         break;
-      case 6:
+      case 5:
         SfbConnectAll ();
         Status = BdsDiscoverEspBootOptions ();
         SfbReportStatus (L"Refresh Devices", Status);
+        break;
+      case 6:
+        BdsRunSecureFastbootMenu ();
         break;
       default:
         return FALSE;

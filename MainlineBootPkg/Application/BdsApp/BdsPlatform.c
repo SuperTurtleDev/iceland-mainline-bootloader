@@ -1,9 +1,9 @@
 /** @file
   Canoe platform initialization for the UEFI BDS application.
 
-  The original FAT container holds configuration, certificates and MEMCFG.
-  Installed drivers, the security status protocol and EFI-stub memory hooks
-  refer into this image, so the application must remain resident afterwards.
+  The FAT container holds MEMCFG and platform configuration. Secure Boot keys
+  live in authenticated UEFI variables. Installed drivers and verification/memory
+  callbacks refer into this image, which never returns to its ABL caller.
 
   Copyright (c) 2026, contributors to the canoe ABL tree.
   SPDX-License-Identifier: BSD-3-Clause
@@ -19,7 +19,7 @@
 #include <Library/PartitionTableUpdate.h>
 #include <Library/SfbConfigStore.h>
 #include <Library/SfbMemFixup.h>
-#include <Library/SfbSecurity.h>
+#include <Library/BdsSecurityLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/SimpleTextIn.h>
@@ -132,6 +132,12 @@ PlatformBdsInit (
   BDS_MENU_ACTION  Action;
 
   if (!mInitialized) {
+    Status = BdsSecurityInitialize ();
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "BDS: image authentication hooks unavailable: %r\n", Status));
+      BdsRequestMenu ();
+    }
+
     if (BdsWaitForVolumeUp ()) {
       BdsRequestMenu ();
     }
@@ -166,17 +172,6 @@ PlatformBdsInit (
     Status = SfbMemFixupLoadConfig ();
     if (EFI_ERROR (Status)) {
       DEBUG ((DEBUG_ERROR, "BDS: MEMCFG load failed: %r\n", Status));
-    }
-
-    // Snapshot policy once per boot before USB export/fastboot can unmount it.
-    SfbSecurityLoadCerts ();
-    if (!SfbSecurityAuthEnabled ()) {
-      SfbSecurityGrantPrivilege ();
-    }
-
-    Status = SfbSecurityInstallProtocol ();
-    if (EFI_ERROR (Status)) {
-      DEBUG ((DEBUG_ERROR, "BDS: security status protocol failed: %r\n", Status));
     }
 
     Status = BdsDiscoverEspBootOptions ();

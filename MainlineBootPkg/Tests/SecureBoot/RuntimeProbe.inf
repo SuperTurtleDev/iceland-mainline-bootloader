@@ -1,0 +1,40 @@
+## @file
+# Signed payload for actual post-ExitBootServices variable boundary checks.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = RuntimeProbe
+  FILE_GUID = E2230359-59B2-4842-AEB6-5EA27C61AD80
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT = RuntimeProbeEntry
+
+[Sources]
+  RuntimeProbe.c
+  TestSupport.c
+  SecureBootTest.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gMainlineBootVariableGuid
+  gEfiImageSecurityDatabaseGuid
+  gEfiFileInfoGuid

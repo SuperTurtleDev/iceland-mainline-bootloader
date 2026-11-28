@@ -262,7 +262,7 @@ def main():
     parser.add_argument("--cases", nargs="+", choices=CASES, default=list(CASES))
     parser.add_argument("--timeout", type=float, default=90, help="wall-clock seconds per QEMU boot, including menus")
     parser.add_argument("--qemu", default="qemu-system-aarch64")
-    parser.add_argument("--firmware-code", type=Path, default=Path("/usr/share/AAVMF/AAVMF_CODE.no-secboot.fd"))
+    parser.add_argument("--firmware-code", type=Path, default=Path("/usr/share/AAVMF/AAVMF_CODE.secboot.fd"))
     parser.add_argument("--firmware-vars", type=Path, default=Path("/usr/share/AAVMF/AAVMF_VARS.fd"))
     args = parser.parse_args()
     if args.timeout <= 0:

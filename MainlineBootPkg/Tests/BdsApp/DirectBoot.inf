@@ -30,9 +30,11 @@
   UefiBootServicesTableLib
   UefiRuntimeServicesTableLib
   DxeServicesLib
+  ReportStatusCodeLib
 
 [Protocols]
   gEfiBdsArchProtocolGuid
+  gEfiRscHandlerProtocolGuid
   gEfiSimpleTextInProtocolGuid
   gEfiSimpleTextOutProtocolGuid
   gEfiSimpleFileSystemProtocolGuid
@@ -43,6 +45,7 @@
   gEfiPartTypeSystemPartGuid
   gEfiFileInfoGuid
   gEfiEventReadyToBootGuid
+  gEfiEventExitBootServicesGuid
   gEfiEndOfDxeEventGroupGuid
 
 [Depex]

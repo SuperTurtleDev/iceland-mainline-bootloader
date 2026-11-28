@@ -1,0 +1,38 @@
+## @file
+# Unsigned probe for disabled Security/Security2 stubs.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = DisabledProbe
+  FILE_GUID = 6DBDE24C-F931-4F03-B4AE-F484FDFE14F3
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT = DisabledProbeEntry
+
+[Sources]
+  DisabledProbe.c
+  TestSupport.c
+  SecureBootTest.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiImageSecurityDatabaseGuid
+  gEfiFileInfoGuid

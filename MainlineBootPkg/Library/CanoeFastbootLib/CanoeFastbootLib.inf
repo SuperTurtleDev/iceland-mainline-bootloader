@@ -90,7 +90,7 @@
 
 [BuildOptions]
   # Keep canoe's existing command set local to this library. Authorization is
-  # enforced at runtime by SfbSecurityLib, including fetch:sb_challenge.
+  # enforced at runtime by BdsSecurityLib using standard UEFI db/dbx trust.
   GCC:*_*_*_CC_FLAGS = -DENABLE_UPDATE_PARTITIONS_CMDS -DENABLE_BOOT_CMD
 
 [Packages]
@@ -113,8 +113,8 @@
   UefiBootServicesTableLib
   UefiLib
   UefiRuntimeServicesTableLib
-  # Security gating for flash/erase/boot/fetch and the sb_challenge flow.
-  SfbSecurityLib
+  # Storage authorization and independent standard EFI image verification.
+  BdsSecurityLib
   UefiVariableCommandsLib
 
 [Protocols]

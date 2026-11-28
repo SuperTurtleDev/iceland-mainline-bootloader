@@ -4,8 +4,11 @@
 **/
 
 #include <Uefi.h>
+#include <Guid/GlobalVariable.h>
+#include <Guid/ImageAuthentication.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/BdsSecurityLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
@@ -13,7 +16,9 @@
 
 #define VARIABLE_LIMIT      SIZE_1MB
 #define DEFAULT_ATTRIBUTES  (EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS)
-#define BASIC_ATTRIBUTES    DEFAULT_ATTRIBUTES
+#define AUTH_ATTRIBUTES     (DEFAULT_ATTRIBUTES | EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS)
+#define STORED_ATTRIBUTES   AUTH_ATTRIBUTES
+#define WRITE_ATTRIBUTES    (STORED_ATTRIBUTES | EFI_VARIABLE_APPEND_WRITE)
 
 typedef struct {
   EFI_GUID    Guid;
@@ -159,6 +164,94 @@ ParseKey (
   }
 
   return Utf8Decode (Text, &Key->Name);
+}
+
+STATIC BOOLEAN
+IsCommandReadOnly (
+  IN CONST CHAR16    *Name,
+  IN CONST EFI_GUID  *Guid
+  )
+{
+  // The Setup-only Secure Fastboot switch must never acquire RT or bypass
+  // physical setup through generic OEM writes or deletion. Its setter retains NV|BS.
+  if (CompareGuid (Guid, &gMainlineBootVariableGuid) &&
+      (StrCmp (Name, BDS_SECURE_FASTBOOT_ENABLE_NAME) == 0))
+  {
+    return TRUE;
+  }
+
+  return (BOOLEAN)(CompareGuid (Guid, &gEfiGlobalVariableGuid) &&
+                   ((StrCmp (Name, L"SecureBoot") == 0) ||
+                    (StrCmp (Name, L"SetupMode") == 0) ||
+                    (StrCmp (Name, L"AuditMode") == 0) ||
+                    (StrCmp (Name, L"DeployedMode") == 0)));
+}
+
+STATIC BOOLEAN
+IsSecureBootKey (
+  IN CONST CHAR16    *Name,
+  IN CONST EFI_GUID  *Guid
+  )
+{
+  if (CompareGuid (Guid, &gEfiGlobalVariableGuid)) {
+    return (BOOLEAN)((StrCmp (Name, L"PK") == 0) || (StrCmp (Name, L"KEK") == 0));
+  }
+
+  return (BOOLEAN)(CompareGuid (Guid, &gEfiImageSecurityDatabaseGuid) &&
+                   ((StrCmp (Name, L"db") == 0) ||
+                    (StrCmp (Name, L"dbx") == 0) ||
+                    (StrCmp (Name, L"dbt") == 0)));
+}
+
+// A size query retrieves attributes without copying the existing value.
+STATIC EFI_STATUS
+ReadAttributes (
+  IN CHAR16    *Name,
+  IN EFI_GUID  *Guid,
+  OUT UINT32   *Attributes
+  )
+{
+  EFI_STATUS  Status;
+  UINTN       Size;
+
+  Size        = 0;
+  *Attributes = 0;
+  Status      = gRT->GetVariable (Name, Guid, Attributes, &Size, NULL);
+  return Status == EFI_BUFFER_TOO_SMALL ? EFI_SUCCESS : Status;
+}
+
+STATIC EFI_STATUS
+RemoveVariable (
+  IN CHAR16    *Name,
+  IN EFI_GUID  *Guid
+  )
+{
+  EFI_STATUS  Status;
+  UINT32      Attributes;
+
+  if (IsCommandReadOnly (Name, Guid)) {
+    return EFI_WRITE_PROTECTED;
+  }
+
+  // Authenticated deletion needs its signed descriptor, supplied via setvar.
+  if (IsSecureBootKey (Name, Guid)) {
+    return EFI_SECURITY_VIOLATION;
+  }
+
+  Status = ReadAttributes (Name, Guid, &Attributes);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  if ((Attributes & EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS) != 0) {
+    return EFI_SECURITY_VIOLATION;
+  }
+
+  if ((Attributes & ~STORED_ATTRIBUTES) != 0) {
+    return EFI_UNSUPPORTED;
+  }
+
+  return gRT->SetVariable (Name, Guid, 0, 0, NULL);
 }
 
 STATIC EFI_STATUS
@@ -418,7 +511,7 @@ FindVariables (
       return EFI_NO_MAPPING;
     }
 
-    Status = gRT->SetVariable (Key->Name, &MatchedGuid, 0, 0, NULL);
+    Status = RemoveVariable (Key->Name, &MatchedGuid);
   }
 
   return Status;
@@ -612,6 +705,14 @@ ParseAttributes (
       Flag = EFI_VARIABLE_RUNTIME_ACCESS;
     }
 
+    if (AsciiStrCmp (Cursor, "AUTH") == 0) {
+      Flag = EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS;
+    }
+
+    if (AsciiStrCmp (Cursor, "APPEND") == 0) {
+      Flag = EFI_VARIABLE_APPEND_WRITE;
+    }
+
     *End = Saved;
     if ((Flag == 0) || ((*Attributes & Flag) != 0)) {
       return EFI_INVALID_PARAMETER;
@@ -638,12 +739,14 @@ ParseAttributes (
 }
 
 EFI_STATUS
-UefiVariableCommand (
+UefiVariableCommandWithData (
   IN CONST CHAR8         *Command,
   IN CONST CHAR8         *Arguments,
   IN UEFI_VARIABLE_EMIT  Emit,
   OUT CHAR8              *Error,
-  IN UINTN               ErrorSize
+  IN UINTN               ErrorSize,
+  IN CONST VOID          *DownloadedData OPTIONAL,
+  IN UINTN               DownloadedSize
   )
 {
   EFI_STATUS    Status;
@@ -654,13 +757,14 @@ UefiVariableCommand (
   UINT32        Attributes;
   UINT32        PreviousAttributes;
   UINT8         *Data;
-  UINT8         *Previous;
+  CONST VOID    *Payload;
   UINTN         Size;
-  UINTN         PreviousSize;
   BOOLEAN       Explicit;
   BOOLEAN       Set;
   BOOLEAN       Remove;
   BOOLEAN       All;
+  BOOLEAN       Download;
+  BOOLEAN       AuthDownload;
 
   if ((Command == NULL) || (Arguments == NULL) || (Emit == NULL) || (Error == NULL) || (ErrorSize == 0)) {
     return EFI_INVALID_PARAMETER;
@@ -687,7 +791,7 @@ UefiVariableCommand (
   }
 
   ZeroMem (&Key, sizeof (Key));
-  Data    = Previous = NULL;
+  Data    = NULL;
   KeyText = Copy;
   Value   = Copy;
   if (*KeyText == '"') {
@@ -738,40 +842,86 @@ UefiVariableCommand (
       goto Done;
     }
 
-    Attributes = DEFAULT_ATTRIBUTES;
+    if (IsCommandReadOnly (Key.Name, &Key.Guid)) {
+      Status = EFI_WRITE_PROTECTED;
+      goto Done;
+    }
+
+    Attributes = IsSecureBootKey (Key.Name, &Key.Guid) ? AUTH_ATTRIBUTES : DEFAULT_ATTRIBUTES;
     Status     = ParseAttributes (&Value, &Attributes, &Explicit);
     if (EFI_ERROR (Status)) {
       goto Done;
     }
 
-    Status = ReadVariable (Key.Name, &Key.Guid, &PreviousAttributes, &Previous, &PreviousSize);
+    Status = ReadAttributes (Key.Name, &Key.Guid, &PreviousAttributes);
     if (!EFI_ERROR (Status)) {
-      if (!Explicit) {
-        Attributes = PreviousAttributes;
+      if ((PreviousAttributes & ~STORED_ATTRIBUTES) != 0) {
+        Status = EFI_UNSUPPORTED;
+        goto Done;
       }
 
-      if ((PreviousAttributes & ~BASIC_ATTRIBUTES) != 0) {
-        Status = EFI_UNSUPPORTED;
+      if (!Explicit) {
+        Attributes = PreviousAttributes;
+      } else if ((Attributes & ~EFI_VARIABLE_APPEND_WRITE) != PreviousAttributes) {
+        // In particular, an explicit attribute list cannot drop AUTH.
+        Status = EFI_INVALID_PARAMETER;
         goto Done;
       }
     } else if (Status != EFI_NOT_FOUND) {
       goto Done;
     }
 
-    Status = ParseValue (Value, &Data, &Size);
-    if (EFI_ERROR (Status)) {
+    if (((Attributes & ~WRITE_ATTRIBUTES) != 0) ||
+        ((Attributes & EFI_VARIABLE_BOOTSERVICE_ACCESS) == 0) ||
+        (IsSecureBootKey (Key.Name, &Key.Guid) &&
+         ((Attributes & ~EFI_VARIABLE_APPEND_WRITE) != AUTH_ATTRIBUTES)))
+    {
+      Status = EFI_INVALID_PARAMETER;
       goto Done;
     }
 
-    Status = gRT->SetVariable (Key.Name, &Key.Guid, Attributes, Size, Data);
+    AuthDownload = (BOOLEAN)(AsciiStrCmp (Value, "auth:download") == 0);
+    Download     = (BOOLEAN)(AuthDownload || (AsciiStrCmp (Value, "download") == 0));
+    if ((((Attributes & EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS) != 0) && !Download) ||
+        (AuthDownload && ((Attributes & EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS) == 0)))
+    {
+      Status = EFI_INVALID_PARAMETER;
+      goto Done;
+    }
+
+    if (Download) {
+      if ((DownloadedData == NULL) || (DownloadedSize == 0)) {
+        AsciiSPrint (Error, ErrorSize, "download a variable payload first");
+        Status = EFI_INVALID_PARAMETER;
+        goto Done;
+      }
+
+      if (DownloadedSize > VARIABLE_LIMIT) {
+        Status = EFI_BAD_BUFFER_SIZE;
+        goto Done;
+      }
+
+      Payload = DownloadedData;
+      Size    = DownloadedSize;
+    } else {
+      Status = ParseValue (Value, &Data, &Size);
+      if (EFI_ERROR (Status)) {
+        goto Done;
+      }
+
+      Payload = Data;
+    }
+
+    // The firmware backend alone verifies .auth descriptors and signatures.
+    Status = gRT->SetVariable (Key.Name, &Key.Guid, Attributes, Size, (VOID *)Payload);
   } else if (Key.Qualified) {
-    Status = Remove ? gRT->SetVariable (Key.Name, &Key.Guid, 0, 0, NULL) : EmitVariable (Key.Name, &Key.Guid, Emit);
+    Status = Remove ? RemoveVariable (Key.Name, &Key.Guid) : EmitVariable (Key.Name, &Key.Guid, Emit);
   } else {
     Status = FindVariables (&Key, All, Remove, Emit);
   }
 
 Done:
-  if (EFI_ERROR (Status)) {
+  if (EFI_ERROR (Status) && (Error[0] == 0)) {
     if (Status == EFI_NO_MAPPING) {
       AsciiSPrint (Error, ErrorSize, "ambiguous name; use guid-Name");
     } else if (Status == EFI_INVALID_PARAMETER) {
@@ -789,10 +939,18 @@ Done:
     FreePool (Data);
   }
 
-  if (Previous != NULL) {
-    FreePool (Previous);
-  }
-
   FreePool (Copy);
   return Status;
+}
+
+EFI_STATUS
+UefiVariableCommand (
+  IN CONST CHAR8         *Command,
+  IN CONST CHAR8         *Arguments,
+  IN UEFI_VARIABLE_EMIT  Emit,
+  OUT CHAR8              *Error,
+  IN UINTN               ErrorSize
+  )
+{
+  return UefiVariableCommandWithData (Command, Arguments, Emit, Error, ErrorSize, NULL, 0);
 }

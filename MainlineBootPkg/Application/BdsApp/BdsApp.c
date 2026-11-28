@@ -5,6 +5,10 @@
   one finite pass and a platform UI boundary. The hosting firmware owns DXE,
   architectural protocols, console policy, variable locks and recovery policy.
 
+  Boot-manager progress and diagnostics go through DEBUG(), which the ABL's
+  report-status-code handler records in the LOGFS partition.  The console is
+  reserved for the platform UI and for the fatal case where no menu is left.
+
   Copyright (c) 2004 - 2019, Intel Corporation. All rights reserved.<BR>
   (C) Copyright 2016-2019 Hewlett Packard Enterprise Development LP<BR>
   (C) Copyright 2015 Hewlett-Packard Development Company, L.P.<BR>
@@ -22,6 +26,8 @@
 #include <Protocol/SimpleFileSystem.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/BdsSecurityLib.h>
+#include <Library/DebugLib.h>
 #include <Library/DevicePathLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
@@ -300,7 +306,7 @@ BdsGetBootOptions (
   mEnumerationStatus = Status;
   if (EFI_ERROR (Status)) {
     if (Status != EFI_NOT_FOUND) {
-      Print (L"BdsApp: ignoring invalid/unreadable BootOrder: %r\n", Status);
+      DEBUG ((DEBUG_ERROR, "BdsApp: ignoring invalid/unreadable BootOrder: %r\n", Status));
     }
 
     return NULL;
@@ -318,7 +324,7 @@ BdsGetBootOptions (
     if (!EFI_ERROR (Status)) {
       (*Count)++;
     } else {
-      Print (L"BdsApp: skipping Boot%04x: %r\n", (UINTN)Order[Index], Status);
+      DEBUG ((DEBUG_WARN, "BdsApp: skipping Boot%04x: %r\n", (UINTN)Order[Index], Status));
       if ((Status == EFI_OUT_OF_RESOURCES) || (Status == EFI_NOT_READY)) {
         mEnumerationStatus = Status;
       }
@@ -366,7 +372,7 @@ BdsCaptureBootNext (
 
   DeleteStatus = gRT->SetVariable (L"BootNext", &gEfiGlobalVariableGuid, 0, 0, NULL);
   if (EFI_ERROR (DeleteStatus) && (DeleteStatus != EFI_NOT_FOUND)) {
-    Print (L"BdsApp: cannot consume BootNext: %r; automatic boot disabled\n", DeleteStatus);
+    DEBUG ((DEBUG_ERROR, "BdsApp: cannot consume BootNext: %r; automatic boot disabled\n", DeleteStatus));
     mBootNextStatus = DeleteStatus;
     mLastBootStatus = DeleteStatus;
     return DeleteStatus;
@@ -374,9 +380,9 @@ BdsCaptureBootNext (
 
   mBootNextPending = mBootNextReserved;
   if (mBootNextPending) {
-    Print (L"BdsApp: BootNext=%04x captured and deleted\n", (UINTN)mBootNext);
+    DEBUG ((DEBUG_INFO, "BdsApp: BootNext=%04x captured and deleted\n", (UINTN)mBootNext));
   } else {
-    Print (L"BdsApp: malformed/unreadable BootNext discarded (%r, %u bytes)\n", Status, Size);
+    DEBUG ((DEBUG_WARN, "BdsApp: malformed/unreadable BootNext discarded (%r, %u bytes)\n", Status, Size));
   }
 
   mBootNextStatus = EFI_SUCCESS;
@@ -785,7 +791,7 @@ BdsRegisterEspOption (
 
   for (Index = 0; Index < Count; Index++) {
     if (BdsSameEspTarget (Options[Index].FilePath, Path)) {
-      Print (L"BdsApp: ESP loader already registered as Boot%04x\n", Options[Index].OptionNumber);
+      DEBUG ((DEBUG_INFO, "BdsApp: ESP loader already registered as Boot%04x\n", Options[Index].OptionNumber));
       EfiBootManagerFreeLoadOptions (Options, Count);
       return EFI_SUCCESS;
     }
@@ -830,7 +836,7 @@ BdsRegisterEspOption (
 
   // Append, never sort, delete or refresh the user's existing options/order.
   Status = EfiBootManagerAddLoadOptionVariable (&Option, MAX_UINTN);
-  Print (L"BdsApp: append ESP Boot%04x: %r\n", Option.OptionNumber, Status);
+  DEBUG ((DEBUG_INFO, "BdsApp: append ESP Boot%04x: %r\n", Option.OptionNumber, Status));
   EfiBootManagerFreeLoadOption (&Option);
   return Status;
 }
@@ -860,7 +866,7 @@ BdsDiscoverEspBootOptions (
 
   Status = BdsConnectDevices ();
   if (EFI_ERROR (Status)) {
-    Print (L"BdsApp: device connection failed: %r\n", Status);
+    DEBUG ((DEBUG_ERROR, "BdsApp: device connection failed: %r\n", Status));
   }
 
   // Storage may have become available only during platform initialization.
@@ -890,7 +896,7 @@ BdsDiscoverEspBootOptions (
                   &Handles
                   );
   if (EFI_ERROR (Status)) {
-    Print (L"BdsApp: no filesystem handles: %r\n", Status);
+    DEBUG ((DEBUG_ERROR, "BdsApp: no filesystem handles: %r\n", Status));
     return Status;
   }
 
@@ -903,7 +909,7 @@ BdsDiscoverEspBootOptions (
     }
 
     EspCount++;
-    Print (L"BdsApp: GPT ESP %u, checking %s\n", EspCount, EFI_REMOVABLE_MEDIA_FILE_NAME);
+    DEBUG ((DEBUG_INFO, "BdsApp: GPT ESP %u, checking %s\n", EspCount, EFI_REMOVABLE_MEDIA_FILE_NAME));
     Remaining = DevicePathFromHandle (Handles[Index]);
     if (Remaining == NULL) {
       continue;
@@ -921,7 +927,7 @@ BdsDiscoverEspBootOptions (
     Remaining = Path;
     Status    = EfiOpenFileByDevicePath (&Remaining, &File, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR (Status)) {
-      Print (L"BdsApp: ESP default loader: %r\n", Status);
+      DEBUG ((DEBUG_WARN, "BdsApp: ESP default loader: %r\n", Status));
       FreePool (Path);
       continue;
     }
@@ -935,13 +941,13 @@ BdsDiscoverEspBootOptions (
 
     File->Close (File);
     if (EFI_ERROR (Status) || (FileSize == 0)) {
-      Print (L"BdsApp: ESP default path is not a nonempty file\n");
+      DEBUG ((DEBUG_WARN, "BdsApp: ESP default path is not a nonempty file\n"));
       FreePool (Path);
       continue;
     }
 
     if (BdsIsSelfDevicePath (Path)) {
-      Print (L"BdsApp: ESP default loader is BdsApp; skipping recursion\n");
+      DEBUG ((DEBUG_INFO, "BdsApp: ESP default loader is BdsApp; skipping recursion\n"));
       FreePool (Path);
       continue;
     }
@@ -955,7 +961,7 @@ BdsDiscoverEspBootOptions (
   }
 
   FreePool (Handles);
-  Print (L"BdsApp: discovery found %u GPT ESP(s), %u eligible default loader(s): %r\n", EspCount, LoaderCount, Result);
+  DEBUG ((DEBUG_INFO, "BdsApp: discovery found %u GPT ESP(s), %u eligible default loader(s): %r\n", EspCount, LoaderCount, Result));
   return Result;
 }
 
@@ -1005,15 +1011,14 @@ BdsBootLoadOption (
     if (!BdsEqualOptions (Option, &Current)) {
       Status = EFI_MEDIA_CHANGED;
     } else if (BdsIsSelfDevicePath (Current.FilePath)) {
-      Print (L"BdsApp: skipping self Boot%04x (%s)\n", Current.OptionNumber, Current.Description);
+      DEBUG ((DEBUG_WARN, "BdsApp: skipping self Boot%04x (%s)\n", Current.OptionNumber, Current.Description));
       Status = EFI_ACCESS_DENIED;
     } else {
-      Print (L"BdsApp: boot Boot%04x %s (attributes 0x%x)\n", Current.OptionNumber, Current.Description, Current.Attributes);
-      Status = BdsBeginImagePolicy ();
+      DEBUG ((DEBUG_INFO, "BdsApp: boot Boot%04x %s (attributes 0x%x)\n", Current.OptionNumber, Current.Description, Current.Attributes));
+      Status = BdsSecurityReady ();
       if (!EFI_ERROR (Status)) {
         EfiBootManagerBoot (&Current);
         Status = Current.Status;
-        BdsEndImagePolicy ();
       }
 
       if (Option->ExitData != NULL) {
@@ -1022,7 +1027,7 @@ BdsBootLoadOption (
 
       Option->ExitData     = Current.ExitData;
       Option->ExitDataSize = Current.ExitDataSize;
-      Print (L"BdsApp: Boot%04x returned %r\n", Current.OptionNumber, Status);
+      DEBUG ((DEBUG_INFO, "BdsApp: Boot%04x returned %r\n", Current.OptionNumber, Status));
     }
 
     EfiBootManagerFreeLoadOption (&Current);
@@ -1069,7 +1074,7 @@ BdsRunBootSequence (
   }
 
   if (BdsMenuRequested ()) {
-    Print (L"BdsApp: platform requested menu; automatic boot deferred\n");
+    DEBUG ((DEBUG_INFO, "BdsApp: platform requested menu; automatic boot deferred\n"));
     return EFI_ABORTED;
   }
 
@@ -1088,7 +1093,7 @@ BdsRunBootSequence (
       }
     } else {
       Result = Status;
-      Print (L"BdsApp: BootNext Boot%04x unavailable: %r\n", (UINTN)mBootNext, Status);
+      DEBUG ((DEBUG_WARN, "BdsApp: BootNext Boot%04x unavailable: %r\n", (UINTN)mBootNext, Status));
     }
   }
 
@@ -1122,7 +1127,7 @@ Done:
     BdsRequestMenu ();
   }
 
-  Print (L"BdsApp: finite boot sequence returned %r\n", Result);
+  DEBUG ((DEBUG_INFO, "BdsApp: finite boot sequence returned %r\n", Result));
   return Result;
 }
 
@@ -1143,7 +1148,7 @@ BdsConnectDevices (
     return Status;
   }
 
-  Print (L"BdsApp: connecting %u existing handles\n", Count);
+  DEBUG ((DEBUG_INFO, "BdsApp: connecting %u existing handles\n", Count));
   for (Index = 0; Index < Count; Index++) {
     gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
   }
@@ -1166,7 +1171,7 @@ BdsAppEntryPoint (
   EFI_DEVICE_PATH_PROTOCOL   *Path;
 
   gBdsImageHandle = ImageHandle;
-  Print (L"BdsApp: application BDS core starting\n");
+  DEBUG ((DEBUG_INFO, "BdsApp: application BDS core starting\n"));
 
   gBS->SetWatchdogTimer (0, 0, 0, NULL);
   BootNextStatus = BdsCaptureBootNext ();
@@ -1203,15 +1208,15 @@ BdsAppEntryPoint (
     }
   }
 
-  Print (L"BdsApp: self identity: path=%s, file=%s\n", (mSelfDevicePath != NULL) ? L"yes" : L"no", (mSelfFile != NULL) ? L"yes" : L"no");
+  DEBUG ((DEBUG_INFO, "BdsApp: self identity: path=%s, file=%s\n", (mSelfDevicePath != NULL) ? L"yes" : L"no", (mSelfFile != NULL) ? L"yes" : L"no"));
 
   // Platform initialization opens the key window, installs storage/FAT support
   // and calls BdsDiscoverEspBootOptions before presenting its menu.
-  Print (L"BdsApp: initializing platform\n");
+  DEBUG ((DEBUG_INFO, "BdsApp: initializing platform\n"));
   Status = PlatformBdsInit ();
   if (EFI_ERROR (Status)) {
     mLastBootStatus = Status;
-    Print (L"BdsApp: platform initialization returned %r\n", Status);
+    DEBUG ((DEBUG_ERROR, "BdsApp: platform initialization returned %r\n", Status));
   } else if (EFI_ERROR (BootNextStatus)) {
     Status          = BootNextStatus;
     mLastBootStatus = Status;
@@ -1223,13 +1228,15 @@ BdsAppEntryPoint (
 
   for (;;) {
     BdsRequestMenu ();
-    Print (L"BdsApp: entering platform menu after %r\n", Status);
+    DEBUG ((DEBUG_INFO, "BdsApp: entering platform menu after %r\n", Status));
     MenuStatus = PlatformBdsInit ();
     if (EFI_ERROR (MenuStatus) || EFI_ERROR (BootNextStatus)) {
       Status          = EFI_ERROR (MenuStatus) ? MenuStatus : BootNextStatus;
       mLastBootStatus = Status;
       // ABL treats any return as a boot failure. Keep callbacks alive even
       // when the console is unavailable, without spinning on an error.
+      Print (L"BdsApp: platform menu failed: %r\n", Status);
+      DEBUG ((DEBUG_ERROR, "BdsApp: platform menu failed: %r\n", Status));
       gBS->Stall (1000000);
       continue;
     }

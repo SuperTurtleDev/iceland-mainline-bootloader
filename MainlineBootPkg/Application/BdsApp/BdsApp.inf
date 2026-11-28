@@ -51,7 +51,7 @@
   PrintLib
   FastbootLib
   SfbConfigStoreLib
-  SfbSecurityLib
+  BdsSecurityLib
   SfbMemFixupLib
   UnicodeCollationEngLib
   DiskIoDxeLib

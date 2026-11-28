@@ -12,21 +12,20 @@
 
 [Includes]
   Include
-  Library/MbedTlsLib/Include
-  Library/MbedTlsLib/mbedtls/include
 
 [LibraryClasses]
   ##  ABL-style mainline Linux loader library (Image + DTB + initrd + cmdline).
   MainlineBootLib|Include/Library/MainlineBootLib.h
   SfbConfigStoreLib|Include/Library/SfbConfigStore.h
-  SfbSecurityLib|Include/Library/SfbSecurity.h
+  BdsSecurityLib|Include/Library/BdsSecurityLib.h
   SfbMemFixupLib|Include/Library/SfbMemFixup.h
   FastbootLib|Include/FastbootLib/FastbootMain.h
   UefiVariableCommandsLib|Include/Library/UefiVariableCommandsLib.h
-  MbedTlsLib|Library/MbedTlsLib/Include/mbedtls/mbedtls_config.h
   DiskIoDxeLib|Library/DiskIoDxeLib/DiskIo.h
   UnicodeCollationEngLib|Library/UnicodeCollationEngLib/UnicodeCollationEng.h
 
+[Guids]
+  gMainlineBootVariableGuid = { 0xae98d750, 0xef2e, 0x49de, { 0x9a, 0x7d, 0xad, 0x80, 0x8e, 0x1b, 0xe1, 0x27 } }
+
 [Protocols]
-  gSfbSecureBootProtocolGuid = { 0x2e7c4a19, 0xd5b0, 0x4c67, { 0x9a, 0x31, 0x86, 0x0f, 0x4d, 0x2b, 0x71, 0xe3 } }
   gEfiMemoryAttributeProtocolGuid = { 0xf4560cf6, 0x40ec, 0x4b4a, { 0xa1, 0x92, 0xbf, 0x1d, 0x57, 0xd0, 0xb1, 0x89 } }

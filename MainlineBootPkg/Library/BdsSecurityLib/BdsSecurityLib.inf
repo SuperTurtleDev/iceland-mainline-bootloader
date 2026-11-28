@@ -1,0 +1,42 @@
+## @file
+# Standard edk2 image verification and UEFI-variable-backed authorization.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = BdsSecurityLib
+  FILE_GUID = A230BBCB-BA86-440B-BD87-78BB409B6811
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS = BdsSecurityLib|UEFI_APPLICATION
+
+[Sources]
+  BdsSecurity.c
+  BdsChallenge.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  CryptoPkg/CryptoPkg.dec
+  SecurityPkg/SecurityPkg.dec
+  MainlineBootPkg/MainlineBootPkg.dec
+
+[LibraryClasses]
+  BaseCryptLib
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  SecurityManagementLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiImageSecurityDatabaseGuid
+  gMainlineBootVariableGuid
+
+[Protocols]
+  gEfiSecurityArchProtocolGuid
+  gEfiSecurity2ArchProtocolGuid
+  gEfiRngProtocolGuid

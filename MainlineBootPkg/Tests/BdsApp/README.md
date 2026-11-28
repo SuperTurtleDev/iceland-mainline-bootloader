@@ -7,12 +7,19 @@ and the console, prepares test variables, then directly loads
 BootOrder, discovery, UI or hotkey logic. BdsApp itself remains an EFI application
 with no BDS architectural or private guard protocol.
 
+BdsApp logs its boot decisions with `DEBUG()`; the production ABL consumes that
+stream into LOGFS. AAVMF ships the ReportStatusCode router without a handler, so
+`DirectBoot.efi` registers a console handler for the test firmware. The runner's
+assertions therefore read the same messages that production writes to LOGFS.
+
 ## Requirements
 
 - A prepared edk2 workspace with built BaseTools and this repository available
   through PACKAGES_PATH.
 - LLVM/Clang 21, QEMU AArch64, sfdisk, mkfs.vfat, mtools, Python 3 and pexpect.
-- `/usr/share/AAVMF/AAVMF_CODE.no-secboot.fd` and `AAVMF_VARS.fd`.
+- `/usr/share/AAVMF/AAVMF_CODE.secboot.fd` and pristine `AAVMF_VARS.fd`.
+  The authenticated-variable backend publishes real SecureBoot/SetupMode status;
+  unenrolled fixtures run with SecureBoot=0 and BdsApp's always-pass stubs.
 
 No mounts, loop devices, firmware flashing or root privileges are used. Input
 firmware is never modified. `make-direct-firmware.py` recognizes the LZMA-guided

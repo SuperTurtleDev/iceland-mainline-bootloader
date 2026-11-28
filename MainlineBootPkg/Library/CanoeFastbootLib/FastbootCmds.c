@@ -78,7 +78,7 @@ found at
 #include "../../Include/Library/PartitionTableUpdate.h"
 #include <Library/PcdLib.h>
 #include <Library/PrintLib.h>
-#include <Library/SfbSecurity.h>
+#include <Library/BdsSecurityLib.h>
 #include <Library/UefiVariableCommandsLib.h>
 #include <Library/ThreadStack.h>
 #include <Library/UefiApplicationEntryPoint.h>
@@ -168,6 +168,8 @@ STATIC UINT8  *mDataBuffer = NULL;
 /*  and the offset for usb to save data into */
 STATIC UINT8  *mFlashDataBuffer = NULL;
 STATIC UINT8  *mUsbDataBuffer   = NULL;
+/* A completed payload currently belongs to mUsbDataBuffer. */
+STATIC BOOLEAN  mDownloadReady = FALSE;
 
 STATIC EFI_KERNEL_PROTOCOL  *KernIntf              = NULL;
 STATIC BOOLEAN              IsMultiThreadSupported = FALSE;
@@ -1423,6 +1425,8 @@ CmdDownload (
   CHAR16  OutputString[FASTBOOT_STRING_MAX_LENGTH];
   CHAR8   *NumBytesString = (CHAR8 *)arg;
 
+  mDownloadReady = FALSE;
+
   /* Argument is 8-character ASCII string hex representation of number of
    * bytes that will be sent in the data phase.Response is "DATA" + that same
    * 8-character string.
@@ -1644,14 +1648,14 @@ CmdFetch (
   if (AsciiStrCmp (FetchArg, "sb_challenge") == 0) {
     CONST UINT8  *Nonce;
 
-    if ((SizeGiven && ((ByteOffset != 0) ||
-                       (RequestSize < SFB_SECURITY_CHALLENGE_SIZE))))
+    if ((ByteOffset != 0) ||
+        (SizeGiven && (RequestSize < BDS_SECURITY_CHALLENGE_SIZE)))
     {
       FastbootFail ("Invalid challenge range");
       return;
     }
 
-    Nonce = SfbSecurityChallenge ();
+    Nonce = BdsSecurityChallenge ();
     if (Nonce == NULL) {
       FastbootFail ("Authorization challenge unavailable");
       return;
@@ -1662,7 +1666,7 @@ CmdFetch (
       TxBuffer,
       MAX_RSP_SIZE,
       "DATA%08x",
-      SFB_SECURITY_CHALLENGE_SIZE
+      BDS_SECURITY_CHALLENGE_SIZE
       );
     Status = GetFastbootDeviceData ()->UsbDeviceProtocol->Send (
                                                             ENDPOINT_OUT,
@@ -1677,7 +1681,7 @@ CmdFetch (
     WaitForTransferComplete ();
     Status = GetFastbootDeviceData ()->UsbDeviceProtocol->Send (
                                                             ENDPOINT_OUT,
-                                                            SFB_SECURITY_CHALLENGE_SIZE,
+                                                            BDS_SECURITY_CHALLENGE_SIZE,
                                                             (UINT8 *)Nonce
                                                             );
     if (Status != EFI_SUCCESS) {
@@ -1691,8 +1695,8 @@ CmdFetch (
   }
 
   /* Locked mode exposes no partition reads beyond the challenge. */
-  if (SfbSecurityLocked ()) {
-    FastbootFail ("Device locked; only fetch:sb_challenge is available");
+  if (BdsSecurityLocked ()) {
+    FastbootFail ("Fastboot locked; fetch:sb_challenge for authorization");
     return;
   }
 
@@ -1895,6 +1899,7 @@ ExchangeFlashAndUsbDataBuf (
   mUsbDataBuffer     = mFlashDataBuffer;
   mFlashDataBuffer   = mTmpbuff;
   mFlashNumDataBytes = mNumDataBytes;
+  mDownloadReady    = FALSE;
 
   if (IsUseMThreadParallel ()) {
     KernIntf->Lock->ReleaseLock (LockFlash);
@@ -1987,6 +1992,11 @@ CmdFlash (
   UINT64                 PartitionSize                = 0;
   UINT32                 Ret;
 
+  if (!mDownloadReady || (mBytesReceivedSoFar != mNumDataBytes)) {
+    FastbootFail ("No completed download to flash");
+    return;
+  }
+
   ExchangeFlashAndUsbDataBuf ();
   if (mFlashDataBuffer == NULL) {
     // Doesn't look like we were sent any data
@@ -2001,23 +2011,17 @@ CmdFlash (
 
   AsciiStrToUnicodeStr (arg, PartitionName);
 
-  /* Virtual partition sb_challenge.sig: the authorization response. The
-   * downloaded buffer must hold a raw signature over the challenge nonce,
-   * verifiable under an AUTH_CERTS certificate. A successful check
-   * unlocks the mutating commands for the rest of the boot. */
-  if (StrnCmp (
-        PartitionName,
-        L"sb_challenge.sig",
-        StrLen (L"sb_challenge.sig")
-        ) == 0)
-  {
-    if (!SfbSecurityAuthEnabled ()) {
+  /* Virtual partition sb_challenge.sig: forward the downloaded signature
+   * over the nonce to BdsSecurityLib, which uses the standard db/dbx trust
+   * policy. Storage authorization never bypasses EFI image verification. */
+  if (StrCmp (PartitionName, L"sb_challenge.sig") == 0) {
+    if (!BdsSecurityAuthEnabled ()) {
       FastbootFail ("No authorization configured");
       return;
     }
 
     if (EFI_ERROR (
-          SfbSecurityVerifyChallenge (
+          BdsSecurityVerifyChallenge (
             mFlashDataBuffer,
             (UINTN)mFlashNumDataBytes
             )
@@ -2032,8 +2036,8 @@ CmdFlash (
   }
 
   /* Everything else that flashes requires authorization when locked. */
-  if (SfbSecurityLocked ()) {
-    FastbootFail ("Device locked; authorize via sb_challenge first");
+  if (BdsSecurityLocked ()) {
+    FastbootFail ("Fastboot locked; authorize via sb_challenge first");
     return;
   }
 
@@ -2276,8 +2280,8 @@ CmdErase (
 
   WaitForFlashFinished ();
 
-  if (SfbSecurityLocked ()) {
-    FastbootFail ("Device locked; authorize via sb_challenge first");
+  if (BdsSecurityLocked ()) {
+    FastbootFail ("Fastboot locked; authorize via sb_challenge first");
     return;
   }
 
@@ -2402,7 +2406,8 @@ AcceptData (
              );
     }
 
-    mState = ExpectCmdState;
+    mState         = ExpectCmdState;
+    mDownloadReady = TRUE;
 
     if (IsUseMThreadParallel ()) {
       KernIntf->Lock->ReleaseLock (LockDownload);
@@ -2994,18 +2999,32 @@ FastbootGetVarInfo (
 STATIC VOID
 CmdUefiVariable (
   IN CONST CHAR8  *Command,
-  IN CONST CHAR8  *Arguments
+  IN CONST CHAR8  *Arguments,
+  IN CONST VOID   *Data OPTIONAL,
+  IN UINTN        Size
   )
 {
   EFI_STATUS  Status;
   CHAR8       Error[61];
 
-  if (SfbSecurityLocked ()) {
-    FastbootFail ("Authorization required for UEFI variables");
+  // OEM variable commands require the same challenge unlock as flash/erase.
+  // Variable permissions and authenticated updates still belong to the
+  // backend. Finish any raw flash before changing the standard db/dbx trust
+  // policy.
+  if (BdsSecurityLocked ()) {
+    FastbootFail ("Fastboot locked; authorize via sb_challenge first");
     return;
   }
 
-  Status = UefiVariableCommand (Command, Arguments, FastbootGetVarInfo, Error, sizeof (Error));
+  WaitForFlashFinished ();
+  if (!mDownloadReady || (mBytesReceivedSoFar != mNumDataBytes)) {
+    Data = NULL;
+    Size = 0;
+  }
+
+  Status = UefiVariableCommandWithData (
+             Command, Arguments, FastbootGetVarInfo, Error, sizeof (Error), Data, Size
+             );
   if (EFI_ERROR (Status)) {
     FastbootFail (Error[0] != 0 ? Error : "UEFI variable command failed");
   } else {
@@ -3020,7 +3039,7 @@ CmdOemGetVar (
   IN UINT32       Size
   )
 {
-  CmdUefiVariable ("getvar", Arg);
+  CmdUefiVariable ("getvar", Arg, NULL, 0);
 }
 
 STATIC VOID
@@ -3030,7 +3049,7 @@ CmdOemSetVar (
   IN UINT32       Size
   )
 {
-  CmdUefiVariable ("setvar", Arg);
+  CmdUefiVariable ("setvar", Arg, Data, Size);
 }
 
 STATIC VOID
@@ -3040,7 +3059,7 @@ CmdOemRmVar (
   IN UINT32       Size
   )
 {
-  CmdUefiVariable ("rmvar", Arg);
+  CmdUefiVariable ("rmvar", Arg, NULL, 0);
 }
 
 STATIC VOID
@@ -3126,11 +3145,11 @@ IsEfiInBootImg (
     PageSize = Hdr->page_size;
   }
 
-  if ((PageSize == 0) || (Hdr->kernel_size == 0)) {
+  if ((PageSize == 0) || (Hdr->kernel_size < 2)) {
     return FALSE;
   }
 
-  if (Size < PageSize + Hdr->kernel_size) {
+  if ((PageSize > Size) || (Hdr->kernel_size > Size - PageSize)) {
     return FALSE;
   }
 
@@ -3165,6 +3184,11 @@ BootEfiImage (
                   );
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "LoadImage failed: %r\n", Status));
+    // EFI_SECURITY_VIOLATION may still return a loaded, non-startable handle.
+    if (ImageHandle != NULL) {
+      gBS->UnloadImage (ImageHandle);
+    }
+
     return Status;
   }
 
@@ -3187,16 +3211,16 @@ CmdBoot (
   VOID          *EfiData = NULL;
   UINT32        EfiSize  = 0;
 
-  if (SfbSecurityLocked ()) {
-    FastbootFail ("Device locked; authorize via sb_challenge first");
-    return;
-  }
-
   /* ============================================
    * 新增：检测并处理 EFI 可执行文件
    * ============================================ */
   if (IsEfiInBootImg (hdr, Size, &EfiData, &EfiSize)) {
     DEBUG ((EFI_D_INFO, "CmdBoot: EFI image in boot.img, size=%u\n", EfiSize));
+
+    if (EFI_ERROR (BdsSecurityInitialize ()) || EFI_ERROR (BdsSecurityReady ())) {
+      FastbootFail ("UEFI image verification unavailable");
+      return;
+    }
 
     FastbootOkay ("Booting EFI image...");
     FastbootUsbDeviceStop ();
@@ -3539,10 +3563,12 @@ FastbootCommandSetup (
   UINT32       PartitionCount              = 0;
   MemCardType  Type                        = UNKNOWN;
 
-  mDataBuffer        = Base;
-  mNumDataBytes      = Size;
-  mFlashNumDataBytes = Size;
-  mUsbDataBuffer     = Base;
+  mDataBuffer         = Base;
+  mNumDataBytes       = Size;
+  mFlashNumDataBytes  = Size;
+  mUsbDataBuffer      = Base;
+  mBytesReceivedSoFar = 0;
+  mDownloadReady      = FALSE;
 
   mFlashDataBuffer = (CheckRootDeviceType () == NAND) ?
                      Base : (Base + MaxUSBBufferSize);
@@ -3603,7 +3629,7 @@ FastbootCommandSetup (
       SbChallengeSizeStr,
       sizeof (SbChallengeSizeStr),
       "%08x",
-      SFB_SECURITY_CHALLENGE_SIZE
+      BDS_SECURITY_CHALLENGE_SIZE
       );
     FastbootPublishVar ("partition-size:sb_challenge", SbChallengeSizeStr);
     FastbootPublishVar ("partition-type:sb_challenge", "raw");

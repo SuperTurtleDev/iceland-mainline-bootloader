@@ -61,9 +61,15 @@
   PeCoffGetEntryPointLib|MdePkg/Library/BasePeCoffGetEntryPointLib/BasePeCoffGetEntryPointLib.inf
   UefiDriverEntryPoint|MdePkg/Library/UefiDriverEntryPoint/UefiDriverEntryPoint.inf
   SfbConfigStoreLib|MainlineBootPkg/Library/SfbConfigStoreLib/SfbConfigStoreLib.inf
-  SfbSecurityLib|MainlineBootPkg/Library/SfbSecurityLib/SfbSecurityLib.inf
+  BdsSecurityLib|MainlineBootPkg/Library/BdsSecurityLib/BdsSecurityLib.inf
+  BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
+  OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf
+  IntrinsicLib|CryptoPkg/Library/IntrinsicLib/IntrinsicLib.inf
+  PeCoffLib|MdePkg/Library/BasePeCoffLib/BasePeCoffLib.inf
+  PeCoffExtraActionLib|MdePkg/Library/BasePeCoffExtraActionLibNull/BasePeCoffExtraActionLibNull.inf
+  SecurityManagementLib|MdeModulePkg/Library/DxeSecurityManagementLib/DxeSecurityManagementLib.inf
+  TpmMeasurementLib|MdeModulePkg/Library/TpmMeasurementLibNull/TpmMeasurementLibNull.inf
   SfbMemFixupLib|MainlineBootPkg/Library/SfbMemFixupLib/SfbMemFixupLib.inf
-  MbedTlsLib|MainlineBootPkg/Library/MbedTlsLib/MbedTlsLib.inf
   DiskIoDxeLib|MainlineBootPkg/Library/DiskIoDxeLib/DiskIoLib.inf
   UnicodeCollationEngLib|MainlineBootPkg/Library/UnicodeCollationEngLib/EnglishLib.inf
   FastbootLib|MainlineBootPkg/Library/CanoeFastbootLib/CanoeFastbootLib.inf
@@ -80,7 +86,7 @@
   # No stack protector: we deliberately do not link QcomModulePkg's StackCanary
   # library (which provides __stack_chk_guard for ABL's -fstack-protector-all).
   # No CFI / BTI / SafeStack either.
-  GCC:*_*_*_ARCHCC_FLAGS  = -fno-stack-protector -fno-common -Wno-unknown-warning-option -Wno-varargs -Wno-misleading-indentation -Wno-shift-negative-value
+  GCC:*_*_*_ARCHCC_FLAGS  = -fno-stack-protector -fno-common -mno-outline-atomics -Wno-unknown-warning-option -Wno-varargs -Wno-misleading-indentation -Wno-shift-negative-value
   GCC:*_*_*_DLINK_FLAGS   = -Wl,-Ttext=0x0
   # clang >= 17 needs these (see CLANG_NEED_EXTRA_DLINK_FLAGS in the top level
   # makefile). Left as a make variable so it expands from the environment
@@ -106,4 +112,7 @@
   MainlineBootPkg/Application/BootApp/BootApp.inf
   MainlineBootPkg/Application/BootUtil/BootUtil.inf
   MainlineBootPkg/Application/QemuBoot/QemuBoot.inf
-  MainlineBootPkg/Application/BdsApp/BdsApp.inf
+  MainlineBootPkg/Application/BdsApp/BdsApp.inf {
+    <LibraryClasses>
+      NULL|SecurityPkg/Library/DxeImageVerificationLib/DxeImageVerificationLib.inf
+  }

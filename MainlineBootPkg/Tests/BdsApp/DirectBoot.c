@@ -6,9 +6,11 @@
 
 #include "TestCommon.h"
 #include <Protocol/Bds.h>
+#include <Protocol/ReportStatusCodeHandler.h>
 #include <Protocol/SimpleTextIn.h>
 #include <Protocol/SimpleTextOut.h>
 #include <Guid/EventGroup.h>
+#include <Library/ReportStatusCodeLib.h>
 
 EFI_STATUS EFIAPI
 LauncherEntry (
@@ -17,6 +19,72 @@ LauncherEntry (
   );
 
 STATIC EFI_HANDLE  mDriverImage;
+
+/*
+  BdsApp logs its boot decisions with DEBUG(), which the production ABL
+  consumes for the LOGFS partition.  AAVMF ships the ReportStatusCode router
+  but no handler, so mirror the stream on the test console for the runner.
+*/
+STATIC EFI_RSC_HANDLER_PROTOCOL  *mRscHandlerProtocol;
+STATIC EFI_EVENT                 mExitBootServicesEvent;
+
+STATIC EFI_STATUS
+EFIAPI
+DebugStatusCodeHandler (
+  IN EFI_STATUS_CODE_TYPE   CodeType,
+  IN EFI_STATUS_CODE_VALUE  Value,
+  IN UINT32                 Instance,
+  IN EFI_GUID               *CallerId,
+  IN EFI_STATUS_CODE_DATA   *Data
+  )
+{
+  UINT32     ErrorLevel;
+  BASE_LIST  Marker;
+  CHAR8      *Format;
+  CHAR8      Buffer[512];
+
+  if ((Data == NULL) ||
+      !ReportStatusCodeExtractDebugInfo (Data, &ErrorLevel, &Marker, &Format))
+  {
+    return EFI_SUCCESS;
+  }
+
+  AsciiBSPrint (Buffer, sizeof (Buffer), Format, Marker);
+  Print (L"%a", Buffer);
+  return EFI_SUCCESS;
+}
+
+STATIC VOID
+EFIAPI
+UnregisterDebugStatusCodeHandler (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  mRscHandlerProtocol->Unregister (DebugStatusCodeHandler);
+}
+
+STATIC VOID
+InstallDebugStatusCodeHandler (
+  VOID
+  )
+{
+  if (EFI_ERROR (gBS->LocateProtocol (&gEfiRscHandlerProtocolGuid, NULL,
+                                      (VOID **)&mRscHandlerProtocol)))
+  {
+    return;
+  }
+
+  if (EFI_ERROR (mRscHandlerProtocol->Register (DebugStatusCodeHandler,
+                                                TPL_HIGH_LEVEL)))
+  {
+    return;
+  }
+
+  gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_NOTIFY,
+                      UnregisterDebugStatusCodeHandler, NULL,
+                      &gEfiEventExitBootServicesGuid, &mExitBootServicesEvent);
+}
 
 STATIC VOID
 ConnectDevices (
@@ -87,6 +155,7 @@ DirectBdsEntry (
   EfiEventGroupSignal (&gEfiEndOfDxeEventGroupGuid);
   ConnectDevices ();
   ConnectConsole ();
+  InstallDebugStatusCodeHandler ();
   Print (L"BDSTEST DIRECT BDS: standard firmware boot manager replaced\n");
   LauncherEntry (mDriverImage, gST);
   CpuDeadLoop ();

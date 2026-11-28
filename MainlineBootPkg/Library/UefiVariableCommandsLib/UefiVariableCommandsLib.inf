@@ -23,3 +23,8 @@
   MemoryAllocationLib
   PrintLib
   UefiRuntimeServicesTableLib
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiImageSecurityDatabaseGuid
+  gMainlineBootVariableGuid

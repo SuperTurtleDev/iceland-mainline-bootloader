@@ -16,6 +16,7 @@ Layout:
 ## Build
 
 ```sh
+git -C edk2 submodule update --init CryptoPkg/Library/OpensslLib/openssl
 ./build.sh            # -> ../../build/bootloader/{BdsApp,BootApp,TestBootApp}.efi
 ```
 
@@ -59,8 +60,10 @@ Boot Entries includes orphan options, active-state control, one-shot BootNext,
 explicit deletion and creation from a selected file.
 
 The canoe BDS platform services are retained: its FAT configuration container,
-certificate authorization and image policy, USB partition/LUN/container export,
-memory-map fixups and EFI memory-attribute protocol support. The Ext4 filesystem
+USB partition/LUN/container export, memory-map fixups and EFI memory-attribute
+protocol support. Image verification uses edk2 DxeImageVerificationLib and
+BaseCryptLib; authenticated key storage remains with firmware/TZ. Fastboot
+challenge authorization uses the standard db/dbx databases. The Ext4 filesystem
 driver is not included. Configuration still lives in the FAT container beginning
 1 MiB into the GPT partition named `efisp`; that name selects configuration only,
 not boot discovery. The leading MiB is reserved for the raw BDS EFI image, and the
@@ -74,10 +77,47 @@ private active-instance protocol or BDS architectural-protocol dependency.
 Install BdsApp in the BDS image slot; the generated ESP retains BootApp as its
 fallback Linux loader. The build does not flash a device.
 
+Boot-manager progress and diagnostics use `DEBUG()` only, exactly like BootApp.
+The ABL report-status-code handler records that stream in the LOGFS partition, so
+an automatic boot leaves the console silent; the console carries the platform UI
+and the fatal case where no menu remains.
+
 The package-local boot library is restricted to boot-option operations. It does
 not run DXE dispatch, driver-health repair, firmware console/UI/hotkey setup,
 recovery policy or host memory-budget adjustment. Platform initialization stays
 with QcomBds/ABL; canoe's explicitly requested facilities live in BdsPlatform.
+
+## Security settings
+
+BdsApp reads the firmware's actual global `SecureBoot` value at startup and
+replaces the methods in the existing Security/Security2 protocol objects before
+connecting devices. `SecureBoot=1` selects this application's standard edk2 image
+verifier; `SecureBoot=0` selects an always-pass stub. Missing or malformed status
+fails closed. `SetupMode` does not override the selected policy. The legacy
+Security notification is handled locally after Security2 image verification.
+Neither QCOM's security initializer nor either original firmware authentication
+callback is invoked. The host variable services remain responsible for
+PK/KEK/db/dbx authentication and persistence.
+
+There is no Secure Boot toggle in BdsApp and it does not read or write
+`SecureBootEnable`. `BdsSecurityInitialize()` is application-local and runs once;
+recursive and repeated calls do not reinstall hooks or execute platform policy.
+The local dispatcher selects its path from the startup status; the linked stock
+edk2 verification library retains its standard variable checks.
+
+BIOS Setup retains **Secure Fastboot** through `EnableSecureFastboot`, GUID
+`ae98d750-ef2e-49de-9a7d-ad808e1be127`. It is UINT8 `NV|BS` without runtime access.
+Missing means FALSE; reading an absent switch does not create it. PK, KEK and db
+must be provisioned before it can be enabled; missing key databases reset an
+enabled setting to FALSE. Read errors or malformed data are reported rather
+than treated as missing keys.
+
+Secure Fastboot is independent of image-verifier readiness. When OFF, Setup
+storage tools offer their normal read-only/read-write choice. When ON, USB mass
+storage, volume storage tools and config-container exports are unavailable,
+including read-only exports. Fastboot flash/erase/fetch retain their separate
+one-shot db/dbx challenge authorization. A successful fastboot challenge does
+not enable the Setup storage tools or bypass EFI image verification.
 
 ## Fastboot UEFI variables
 
@@ -103,8 +143,14 @@ bytes. Empty writes are rejected; deletion is explicit through `rmvar`.
 New variables default to `NV,BS,RT`. `attrs=BS`, `attrs=BS,RT`, `attrs=NV,BS` and
 `attrs=NV,BS,RT` select volatile/nonvolatile and access properties. Existing
 attributes are preserved when omitted. Changing existing attributes is subject
-to the firmware's normal rules; authenticated-variable payloads are not supported
-by this text command. Runtime access requires boot-service access.
+to the firmware's normal rules. `auth:download` submits the completed fastboot
+download buffer unchanged to the firmware for authenticated updates; `attrs=AUTH`
+selects time-based authentication and `APPEND` selects append-write. Standard
+PK/KEK/db/dbx names default to authenticated attributes. Signed deletion uses an
+authenticated empty payload, not `rmvar`. Runtime access requires boot-service
+access. Generic commands cannot write/remove EnableSecureFastboot; use its
+dedicated setup control. SecureBoot and the other firmware mode/status variables
+remain protected from generic modification.
 
 `getvar Name` returns every matching GUID. `rmvar Name` requires exactly one match;
 otherwise specify `guid-Name`. Names with spaces are accepted by get/remove;

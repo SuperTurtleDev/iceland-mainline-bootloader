@@ -19,13 +19,11 @@
 #include <Library/DevicePathLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
-#include <Library/SfbSecurity.h>
+#include <Library/BdsSecurityLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/LoadedImage.h>
-#include <Protocol/Security.h>
-#include <Protocol/Security2.h>
 
 EFI_STATUS
 BdsReadBootOrder (
@@ -538,131 +536,6 @@ Done:
   return Status;
 }
 
-STATIC EFI_SECURITY_ARCH_PROTOCOL              *mSecurity;
-STATIC EFI_SECURITY2_ARCH_PROTOCOL             *mSecurity2;
-STATIC EFI_SECURITY_FILE_AUTHENTICATION_STATE  mOriginalState;
-STATIC EFI_SECURITY2_FILE_AUTHENTICATION       mOriginalAuthentication;
-STATIC BOOLEAN                                 mEnforceFirmwarePolicy;
-STATIC UINTN                                   mPolicyDepth;
-
-STATIC
-EFI_STATUS
-EFIAPI
-BdsAuthenticateState (
-  IN CONST EFI_SECURITY_ARCH_PROTOCOL  *This,
-  IN UINT32                            AuthenticationStatus,
-  IN CONST EFI_DEVICE_PATH_PROTOCOL    *File
-  )
-{
-  if (mEnforceFirmwarePolicy && (mOriginalState != NULL)) {
-    return mOriginalState (This, AuthenticationStatus, File);
-  }
-
-  // SECURITY2 verifies the exact buffer supplied to LoadImage.
-  return EFI_SUCCESS;
-}
-
-STATIC
-EFI_STATUS
-EFIAPI
-BdsAuthenticateImage (
-  IN CONST EFI_SECURITY2_ARCH_PROTOCOL  *This,
-  IN CONST EFI_DEVICE_PATH_PROTOCOL     *DevicePath,
-  IN VOID                               *FileBuffer,
-  IN UINTN                              FileSize,
-  IN BOOLEAN                            BootPolicy
-  )
-{
-  EFI_STATUS  Status;
-
-  if (mEnforceFirmwarePolicy && (mOriginalAuthentication != NULL)) {
-    Status = mOriginalAuthentication (This, DevicePath, FileBuffer, FileSize, BootPolicy);
-    if (EFI_ERROR (Status)) {
-      return Status;
-    }
-  }
-
-  if ((FileBuffer == NULL) || (FileSize == 0)) {
-    return SfbSecurityVerifyEnabled () ? EFI_SECURITY_VIOLATION : EFI_SUCCESS;
-  }
-
-  Status = SfbSecurityVerifyImage (FileBuffer, FileSize);
-  return (Status == EFI_UNSUPPORTED) ? EFI_SECURITY_VIOLATION : Status;
-}
-
-EFI_STATUS
-BdsBeginImagePolicy (
-  VOID
-  )
-{
-  EFI_STATUS  Status;
-  UINT8       SecureBoot;
-  UINTN       Size;
-
-  if (mPolicyDepth != 0) {
-    mPolicyDepth++;
-    return EFI_SUCCESS;
-  }
-
-  mSecurity               = NULL;
-  mSecurity2              = NULL;
-  mOriginalState          = NULL;
-  mOriginalAuthentication = NULL;
-  Size                    = sizeof (SecureBoot);
-  Status                  = gRT->GetVariable (L"SecureBoot", &gEfiGlobalVariableGuid, NULL, &Size, &SecureBoot);
-  mEnforceFirmwarePolicy  = (BOOLEAN)(Status != EFI_NOT_FOUND);
-  if (!EFI_ERROR (Status) && (Size == sizeof (SecureBoot)) && (SecureBoot == 0)) {
-    mEnforceFirmwarePolicy = FALSE;
-  }
-
-  Status = gBS->LocateProtocol (&gEfiSecurity2ArchProtocolGuid, NULL, (VOID **)&mSecurity2);
-  if (EFI_ERROR (Status) || (mSecurity2 == NULL)) {
-    mSecurity2 = NULL;
-    if (SfbSecurityVerifyEnabled ()) {
-      return EFI_UNSUPPORTED;
-    }
-  }
-
-  Status = gBS->LocateProtocol (&gEfiSecurityArchProtocolGuid, NULL, (VOID **)&mSecurity);
-  if (EFI_ERROR (Status)) {
-    mSecurity = NULL;
-  }
-
-  if (mSecurity != NULL) {
-    mOriginalState                     = mSecurity->FileAuthenticationState;
-    mSecurity->FileAuthenticationState = BdsAuthenticateState;
-  }
-
-  if (mSecurity2 != NULL) {
-    mOriginalAuthentication        = mSecurity2->FileAuthentication;
-    mSecurity2->FileAuthentication = BdsAuthenticateImage;
-  }
-
-  mPolicyDepth = 1;
-  return EFI_SUCCESS;
-}
-
-VOID
-BdsEndImagePolicy (
-  VOID
-  )
-{
-  if ((mPolicyDepth == 0) || (--mPolicyDepth != 0)) {
-    return;
-  }
-
-  if (mSecurity != NULL) {
-    mSecurity->FileAuthenticationState = mOriginalState;
-  }
-
-  if (mSecurity2 != NULL) {
-    mSecurity2->FileAuthentication = mOriginalAuthentication;
-  }
-
-  mSecurity  = NULL;
-  mSecurity2 = NULL;
-}
-
 EFI_STATUS
 BdsBootFile (
   IN EFI_HANDLE    Volume,
@@ -683,7 +556,7 @@ BdsBootFile (
     return Status;
   }
 
-  Status = BdsBeginImagePolicy ();
+  Status = BdsSecurityReady ();
   if (EFI_ERROR (Status)) {
     EfiBootManagerFreeLoadOption (&Option);
     return Status;
@@ -713,7 +586,6 @@ BdsBootFile (
     }
   }
 
-  BdsEndImagePolicy ();
   EfiBootManagerFreeLoadOption (&Option);
   return Status;
 }
@@ -745,7 +617,7 @@ BdsLoadDriver (
     return EFI_ACCESS_DENIED;
   }
 
-  Status = BdsBeginImagePolicy ();
+  Status = BdsSecurityReady ();
   if (EFI_ERROR (Status)) {
     FreePool (DevicePath);
     return Status;
@@ -759,8 +631,7 @@ BdsLoadDriver (
       gBS->UnloadImage (ImageHandle);
     }
 
-    BdsEndImagePolicy ();
-    return Status;
+      return Status;
   }
 
   Status = gBS->HandleProtocol (ImageHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&Loaded);
@@ -769,14 +640,12 @@ BdsLoadDriver (
        (Loaded->ImageCodeType != EfiRuntimeServicesCode)))
   {
     gBS->UnloadImage (ImageHandle);
-    BdsEndImagePolicy ();
-    return EFI_UNSUPPORTED;
+      return EFI_UNSUPPORTED;
   }
 
   ExitData     = NULL;
   ExitDataSize = 0;
   Status       = gBS->StartImage (ImageHandle, &ExitDataSize, &ExitData);
-  BdsEndImagePolicy ();
   if (ExitData != NULL) {
     FreePool (ExitData);
   }

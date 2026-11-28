@@ -76,15 +76,4 @@ BdsLoadDriver (
   IN CONST CHAR16  *Path
   );
 
-// Temporary, nestable policy scope. Every successful Begin requires an End.
-EFI_STATUS
-BdsBeginImagePolicy (
-  VOID
-  );
-
-VOID
-BdsEndImagePolicy (
-  VOID
-  );
-
 #endif
